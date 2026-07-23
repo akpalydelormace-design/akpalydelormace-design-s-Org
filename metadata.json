@@ -1,0 +1,6 @@
+{
+  "name": "EduMentor",
+  "description": "Plateforme d'apprentissage intelligente et interactive conforme au programme scolaire de Côte d'Ivoire 2026-2027.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
