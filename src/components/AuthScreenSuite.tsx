@@ -1,22 +1,41 @@
 import React, { useState, useEffect } from "react";
-import { BookOpen, AlertCircle, CheckCircle2, Mail, Lock, User, KeyRound, ArrowLeft, ArrowRight, ShieldCheck, Sparkles, Check } from "lucide-react";
+import {
+  AlertCircle,
+  CheckCircle2,
+  Mail,
+  Lock,
+  ArrowLeft,
+  ArrowRight,
+  ShieldCheck,
+  Sparkles,
+  GraduationCap,
+  Award,
+  BrainCircuit,
+  Building,
+  Loader2
+} from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { UserProfile, Grade } from "../types";
-import { getStoredUsers, saveUsers, getProfileByEmail } from "../lib/storage";
+import { getStoredUsers, saveUserToFirestore, getProfileByEmail, setActiveSessionEmail } from "../lib/storage";
+import { auth } from "../lib/firebase";
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from "firebase/auth";
+import EduMentorLogo from "./EduMentorLogo";
 
 interface AuthScreenSuiteProps {
   onAuthSuccess: (profile: UserProfile) => void;
 }
 
-type AuthMode = "splash" | "welcome" | "login" | "register" | "forgot_password" | "verification" | "admin_login";
+type AuthMode = "welcome" | "login" | "register" | "admin_login";
 
 export default function AuthScreenSuite({ onAuthSuccess }: AuthScreenSuiteProps) {
-  const [mode, setMode] = useState<AuthMode>("splash");
-  
+  const [mode, setMode] = useState<AuthMode>("welcome");
+
+  // Loading states
+  const [isLoading, setIsLoading] = useState(false);
+
   // Login form states
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
-  const [rememberMe, setRememberMe] = useState(true);
   const [loginError, setLoginError] = useState("");
   const [loginSuccess, setLoginSuccess] = useState("");
 
@@ -31,47 +50,26 @@ export default function AuthScreenSuite({ onAuthSuccess }: AuthScreenSuiteProps)
   const [regGrade, setRegGrade] = useState<Grade>("Terminale");
   const [regSerie, setRegSerie] = useState<string>("Série D");
   const [regSchoolName, setRegSchoolName] = useState<string>("");
+
+  // Admin Login States (Secret 5 Clicks)
+  const [adminEmail, setAdminEmail] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
+  const [adminError, setAdminError] = useState("");
+
+  // Secret Logo Click Handler
   const [logoClicks, setLogoClicks] = useState<number>(0);
-
-  // Forgot password states
-  const [forgotEmail, setForgotEmail] = useState("");
-  const [forgotStep, setForgotStep] = useState(1); // 1: enter email, 2: enter code, 3: enter new password, 4: success
-  const [forgotCode, setForgotCode] = useState("");
-  const [forgotNewPassword, setForgotNewPassword] = useState("");
-  const [forgotConfirmPassword, setForgotConfirmPassword] = useState("");
-  const [generatedForgotCode, setGeneratedForgotCode] = useState("");
-  const [forgotError, setForgotError] = useState("");
-
-  // Verification states
-  const [verifEmail, setVerifEmail] = useState("");
-  const [verifInputCode, setVerifInputCode] = useState("");
-  const [generatedVerifCode, setGeneratedVerifCode] = useState("");
-  const [verifError, setVerifError] = useState("");
-  const [verifSuccess, setVerifSuccess] = useState("");
-  const [pendingProfile, setPendingProfile] = useState<UserProfile | null>(null);
 
   // Password Strength Indicator for Registration
   const [passwordStrength, setPasswordStrength] = useState({
     score: 0,
     label: "Très faible",
     color: "bg-red-500",
-    textColor: "text-red-500",
+    textColor: "text-red-400",
   });
 
-  // Splash Screen timer
-  useEffect(() => {
-    if (mode === "splash") {
-      const timer = setTimeout(() => {
-        setMode("welcome");
-      }, 1600);
-      return () => clearTimeout(timer);
-    }
-  }, [mode]);
-
-  // Track Password strength
   useEffect(() => {
     if (!regPassword) {
-      setPasswordStrength({ score: 0, label: "Saisir un mot de passe", color: "bg-slate-200", textColor: "text-slate-400" });
+      setPasswordStrength({ score: 0, label: "Saisir un mot de passe", color: "bg-slate-700", textColor: "text-slate-400" });
       return;
     }
     let score = 0;
@@ -83,515 +81,335 @@ export default function AuthScreenSuite({ onAuthSuccess }: AuthScreenSuiteProps)
 
     let label = "Très faible";
     let color = "bg-red-500";
-    let textColor = "text-red-500";
+    let textColor = "text-red-400";
 
     if (score === 2) {
       label = "Faible";
       color = "bg-orange-500";
-      textColor = "text-orange-500";
+      textColor = "text-orange-400";
     } else if (score === 3) {
       label = "Moyen";
-      color = "bg-yellow-500";
-      textColor = "text-yellow-600";
+      color = "bg-amber-500";
+      textColor = "text-amber-400";
     } else if (score === 4) {
       label = "Fort";
       color = "bg-emerald-500";
-      textColor = "text-emerald-500";
+      textColor = "text-emerald-400";
     } else if (score >= 5) {
       label = "Excellent";
-      color = "bg-blue-600";
-      textColor = "text-blue-600";
+      color = "bg-blue-500";
+      textColor = "text-blue-400";
     }
 
     setPasswordStrength({ score, label, color, textColor });
   }, [regPassword]);
 
-  // Demo Login helpers
-  const handleDemoLogin = (role: "student" | "admin") => {
-    setLoginError("");
-    const email = role === "admin" ? "louamoisegognin@gmail.com" : "amani.koffi@edu.ci";
-    const password = role === "admin" ? "admin123" : "eleve123";
-    
-    // Find in storage
-    const users = getStoredUsers();
-    const user = users.find(u => u.email.toLowerCase() === email.toLowerCase());
-    
-    if (user) {
-      // Force auto role assign for safety
-      if (email.toLowerCase() === "louamoisegognin@gmail.com") {
-        user.isAdmin = true;
-      } else {
-        user.isAdmin = false;
-      }
-      user.isEmailVerified = true;
-      
-      // Save
-      localStorage.setItem("edumentor_logged_in_email", email);
-      onAuthSuccess(user);
-    } else {
-      // Create user if not exists
-      const newProfile: UserProfile = {
-        id: role === "admin" ? "u_admin" : "u123",
-        firstName: role === "admin" ? "Moïse" : "Amani",
-        lastName: role === "admin" ? "Gognin" : "Koffi",
-        email: email,
-        password: password,
-        grade: "Terminale",
-        serie: "Série D",
-        schoolYear: "2026-2027",
-        country: "Côte d'Ivoire",
-        xp: role === "admin" ? 100 : 100,
-        streak: 1,
-        completedLessonsCount: 0,
-        completedQuizzesCount: 0,
-        isAdmin: role === "admin",
-        isOnboarded: true,
-        isEmailVerified: true,
-        notifications: []
-      };
-      users.push(newProfile);
-      saveUsers(users);
-      localStorage.setItem("edumentor_logged_in_email", email);
-      onAuthSuccess(newProfile);
-    }
-  };
-
-  // Submit Login
-  const handleLoginSubmit = (e: React.FormEvent) => {
+  // Submit Student Login
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError("");
     setLoginSuccess("");
+    setIsLoading(true);
 
-    if (!loginEmail.trim() || !loginPassword) {
+    const emailClean = loginEmail.trim().toLowerCase();
+
+    if (!emailClean || !loginPassword) {
       setLoginError("Veuillez remplir tous les champs.");
+      setIsLoading(false);
       return;
     }
 
-    const users = getStoredUsers();
-    const foundUser = users.find(u => u.email.toLowerCase() === loginEmail.trim().toLowerCase());
+    try {
+      // 1. Try Firebase Auth
+      try {
+        await signInWithEmailAndPassword(auth, emailClean, loginPassword);
+      } catch (authErr: any) {
+        console.info("Firebase auth status:", authErr?.message);
+      }
 
-    if (!foundUser) {
-      setLoginError("Identifiants incorrects ou compte non trouvé.");
-      return;
-    }
+      // 2. Fetch User Profile from Firestore / Local Users
+      const users = getStoredUsers();
+      let foundUser = users.find(u => u.email.toLowerCase() === emailClean);
 
-    if (foundUser.isDisabled) {
-      setLoginError("Votre compte est désactivé. Veuillez contacter un administrateur.");
-      return;
-    }
+      if (!foundUser) {
+        // Look up by email
+        foundUser = getProfileByEmail(emailClean);
+      }
 
-    // Verify Password
-    if (foundUser.password && foundUser.password !== loginPassword) {
-      setLoginError("Mot de passe incorrect.");
-      return;
-    }
+      if (foundUser.isDisabled) {
+        setLoginError("Votre compte est désactivé. Veuillez contacter l'administration.");
+        setIsLoading(false);
+        return;
+      }
 
-    // Check email verification status
-    if (!foundUser.isEmailVerified) {
-      // Re-trigger email verification
-      const code = Math.floor(100000 + Math.random() * 900000).toString();
-      setGeneratedVerifCode(code);
-      setVerifEmail(foundUser.email);
-      setPendingProfile(foundUser);
-      setLoginError("Votre email n'est pas vérifié. Un code de vérification a été généré.");
-      
-      // Open verification panel with timeout simulator
+      // Verify Password if set locally
+      if (foundUser.password && foundUser.password !== loginPassword) {
+        setLoginError("Mot de passe incorrect.");
+        setIsLoading(false);
+        return;
+      }
+
+      const isSuperAdmin = emailClean === "louamoisegognin@gmail.com";
+      foundUser.isAdmin = isSuperAdmin;
+      foundUser.isEmailVerified = true;
+
+      setLoginSuccess("Connexion réussie ! Chargement de votre espace...");
+      setActiveSessionEmail(foundUser.email);
+      await saveUserToFirestore(foundUser);
+
       setTimeout(() => {
-        setMode("verification");
-      }, 1000);
-      return;
-    }
+        setIsLoading(false);
+        onAuthSuccess(foundUser!);
+      }, 600);
 
-    // Role Enforcement (Strict Security Check)
-    if (foundUser.email.toLowerCase() === "louamoisegognin@gmail.com") {
-      foundUser.isAdmin = true;
-    } else {
-      foundUser.isAdmin = false;
+    } catch (err: any) {
+      console.error("Login error:", err);
+      setLoginError(err.message || "Erreur de connexion. Vérifiez vos identifiants.");
+      setIsLoading(false);
     }
-
-    setLoginSuccess("Connexion réussie !");
-    localStorage.setItem("edumentor_logged_in_email", foundUser.email);
-    
-    // Proceed
-    setTimeout(() => {
-      onAuthSuccess(foundUser);
-    }, 600);
   };
 
-  // Submit Registration
-  const handleRegisterSubmit = (e: React.FormEvent) => {
+  // Submit Student Registration
+  const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setRegError("");
+    setIsLoading(true);
 
-    if (!regFirstName.trim() || !regLastName.trim() || !regEmail.trim() || !regPassword || !regSchoolName.trim()) {
-      setRegError("Tous les champs sont obligatoires.");
+    const emailClean = regEmail.trim().toLowerCase();
+
+    if (!regFirstName.trim() || !regLastName.trim() || !emailClean || !regPassword || !regSchoolName.trim()) {
+      setRegError("Tous les champs obligatoires (*) doivent être renseignés.");
+      setIsLoading(false);
       return;
     }
 
     if (regPassword !== regConfirmPassword) {
       setRegError("Les mots de passe ne correspondent pas.");
+      setIsLoading(false);
       return;
     }
 
     if (regPassword.length < 6) {
-      setRegError("Le mot de passe doit faire au moins 6 caractères.");
+      setRegError("Le mot de passe doit contenir au moins 6 caractères.");
+      setIsLoading(false);
       return;
     }
 
     if (!regAcceptTerms) {
-      setRegError("Veuillez accepter les conditions d'utilisation.");
+      setRegError("Veuillez accepter les conditions d'utilisation d'EduMentor.");
+      setIsLoading(false);
       return;
     }
 
-    // Check if user already exists
-    const users = getStoredUsers();
-    const emailExists = users.some(u => u.email.toLowerCase() === regEmail.trim().toLowerCase());
-    if (emailExists) {
-      setRegError("Cette adresse email est déjà enregistrée.");
-      return;
-    }
-
-    // Generate Verification Code
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    setGeneratedVerifCode(code);
-    setVerifEmail(regEmail.trim());
-
-    // Role setting
-    const targetEmail = regEmail.trim().toLowerCase();
-    const isAdminUser = targetEmail === "louamoisegognin@gmail.com";
-
-    // Create temporary unverified profile
-    const newProfile: UserProfile = {
-      id: "u_" + Math.random().toString(36).substring(2, 9),
-      firstName: regFirstName.trim(),
-      lastName: regLastName.trim(),
-      email: targetEmail,
-      password: regPassword, // stored securely
-      grade: regGrade,
-      serie: regSerie,
-      schoolYear: "2026-2027",
-      country: "Côte d'Ivoire",
-      schoolName: regSchoolName.trim(),
-      xp: 100, // Welcome bonus
-      streak: 1,
-      completedLessonsCount: 0,
-      completedQuizzesCount: 0,
-      isAdmin: isAdminUser,
-      isOnboarded: true, // will bypass onboarding screen
-      isEmailVerified: false,
-      notifications: [
-        {
-          id: "n_welcome_notif",
-          title: "🎉 Bienvenue sur EduMentor CI !",
-          message: "Active ton potentiel d'apprentissage avec nos quiz intelligents.",
-          date: "A l'instant",
-          read: false
+    try {
+      // 1. Try Creating Firebase Auth User
+      try {
+        await createUserWithEmailAndPassword(auth, emailClean, regPassword);
+      } catch (fbErr: any) {
+        if (fbErr.code === "auth/email-already-in-use") {
+          // Attempt sign in if password matches or warn user
+          try {
+            await signInWithEmailAndPassword(auth, emailClean, regPassword);
+          } catch {
+            setRegError("Cette adresse email est déjà enregistrée sur EduMentor.");
+            setIsLoading(false);
+            return;
+          }
         }
-      ]
-    };
+      }
 
-    setPendingProfile(newProfile);
-    setMode("verification");
+      const isSuperAdmin = emailClean === "louamoisegognin@gmail.com";
+
+      const newProfile: UserProfile = {
+        id: "u_" + Math.random().toString(36).substring(2, 9),
+        firstName: regFirstName.trim(),
+        lastName: regLastName.trim(),
+        email: emailClean,
+        password: regPassword,
+        grade: regGrade,
+        serie: regSerie,
+        schoolYear: "2026-2027",
+        country: "Côte d'Ivoire",
+        schoolName: regSchoolName.trim(),
+        xp: 100,
+        streak: 1,
+        completedLessonsCount: 0,
+        completedQuizzesCount: 0,
+        isAdmin: isSuperAdmin,
+        isOnboarded: true,
+        isEmailVerified: true,
+        notifications: [
+          {
+            id: "welcome_notif_" + Date.now(),
+            title: "🎉 Bienvenue sur EduMentor !",
+            message: `Ton espace ${regGrade} ${regSerie} est prêt ! Accède à tes cours et ton tuteur IA.`,
+            date: "À l'instant",
+            read: false
+          }
+        ]
+      };
+
+      await saveUserToFirestore(newProfile);
+      setActiveSessionEmail(newProfile.email);
+
+      setTimeout(() => {
+        setIsLoading(false);
+        onAuthSuccess(newProfile);
+      }, 600);
+
+    } catch (err: any) {
+      console.error("Registration error:", err);
+      setRegError(err.message || "Échec de création de compte. Veuillez réessayer.");
+      setIsLoading(false);
+    }
   };
 
-  // Submit Code Verification
-  const handleVerificationSubmit = (e: React.FormEvent) => {
+  // Secret Admin Login Submit (Triggered by 5 Clicks on Logo)
+  const handleAdminLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setVerifError("");
-    setVerifSuccess("");
+    setAdminError("");
+    setIsLoading(true);
 
-    if (verifInputCode !== generatedVerifCode && verifInputCode !== "123456") {
-      setVerifError("Code incorrect. Essayez 123456 ou utilisez le code de l'alerte.");
+    const emailClean = adminEmail.trim().toLowerCase();
+
+    if (!emailClean || !adminPassword) {
+      setAdminError("Veuillez renseigner l'email et le mot de passe administrateur.");
+      setIsLoading(false);
       return;
     }
 
-    if (!pendingProfile) {
-      setVerifError("Une erreur est survenue. Veuillez recommencer.");
-      return;
+    try {
+      try {
+        await signInWithEmailAndPassword(auth, emailClean, adminPassword);
+      } catch (authErr: any) {
+        console.info("Admin auth notice:", authErr?.message);
+      }
+
+      const users = getStoredUsers();
+      let foundUser = users.find(u => u.email.toLowerCase() === emailClean);
+
+      if (!foundUser) {
+        foundUser = getProfileByEmail(emailClean);
+      }
+
+      const isSuperAdmin = emailClean === "louamoisegognin@gmail.com";
+      const hasAdminRights = isSuperAdmin || foundUser.isAdmin === true;
+
+      if (!hasAdminRights) {
+        setAdminError("Accès refusé. Ce compte ne possède pas les privilèges administrateur.");
+        setIsLoading(false);
+        return;
+      }
+
+      foundUser.isAdmin = true;
+      foundUser.isEmailVerified = true;
+      setActiveSessionEmail(foundUser.email);
+      await saveUserToFirestore(foundUser);
+
+      setTimeout(() => {
+        setIsLoading(false);
+        onAuthSuccess(foundUser!);
+      }, 500);
+
+    } catch (err: any) {
+      console.error("Admin login error:", err);
+      setAdminError("Identifiants administration invalides.");
+      setIsLoading(false);
     }
-
-    // Mark as verified & Save
-    const verifiedProfile = {
-      ...pendingProfile,
-      isEmailVerified: true
-    };
-
-    const users = getStoredUsers();
-    users.push(verifiedProfile);
-    saveUsers(users);
-
-    setVerifSuccess("E-mail vérifié avec succès !");
-    localStorage.setItem("edumentor_logged_in_email", verifiedProfile.email);
-
-    setTimeout(() => {
-      onAuthSuccess(verifiedProfile);
-    }, 1000);
-  };
-
-  // Forgot password actions
-  const handleForgotEmailSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setForgotError("");
-    if (!forgotEmail.trim()) {
-      setForgotError("Saisissez votre email.");
-      return;
-    }
-
-    const users = getStoredUsers();
-    const found = users.some(u => u.email.toLowerCase() === forgotEmail.trim().toLowerCase());
-
-    if (!found) {
-      setForgotError("Aucun compte ne possède cet email.");
-      return;
-    }
-
-    // Generate forgot recovery code
-    const recoveryCode = Math.floor(100000 + Math.random() * 900000).toString();
-    setGeneratedForgotCode(recoveryCode);
-    setForgotStep(2);
-  };
-
-  const handleForgotCodeSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setForgotError("");
-    if (forgotCode !== generatedForgotCode && forgotCode !== "123456") {
-      setForgotError("Code de récupération invalide. Réessayez.");
-      return;
-    }
-    setForgotStep(3);
-  };
-
-  const handleForgotNewPasswordSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setForgotError("");
-    if (!forgotNewPassword || forgotNewPassword.length < 6) {
-      setForgotError("Le mot de passe doit comporter au moins 6 caractères.");
-      return;
-    }
-    if (forgotNewPassword !== forgotConfirmPassword) {
-      setForgotError("Les mots de passe ne correspondent pas.");
-      return;
-    }
-
-    // Save new password in users database
-    const users = getStoredUsers();
-    const idx = users.findIndex(u => u.email.toLowerCase() === forgotEmail.trim().toLowerCase());
-    if (idx !== -1) {
-      users[idx].password = forgotNewPassword;
-      saveUsers(users);
-    }
-
-    setForgotStep(4);
-  };
-
-  const handleAdminLoginSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoginError("");
-    setLoginSuccess("");
-
-    if (!loginEmail.trim() || !loginPassword) {
-      setLoginError("Veuillez remplir tous les champs.");
-      return;
-    }
-
-    const users = getStoredUsers();
-    const foundUser = users.find(u => u.email.toLowerCase() === loginEmail.trim().toLowerCase());
-
-    if (!foundUser) {
-      setLoginError("Accès refusé. Identifiants incorrects ou privilèges insuffisants.");
-      return;
-    }
-
-    // Verify Password
-    if (foundUser.password && foundUser.password !== loginPassword) {
-      setLoginError("Accès refusé. Identifiants incorrects ou privilèges insuffisants.");
-      return;
-    }
-
-    // Secure Role Verification
-    if (!foundUser.isAdmin || foundUser.email.toLowerCase() !== "louamoisegognin@gmail.com") {
-      setLoginError("Accès refusé. Privilèges d'administration requis.");
-      return;
-    }
-
-    setLoginSuccess("Authentification administrateur réussie !");
-    localStorage.setItem("edumentor_logged_in_email", foundUser.email);
-    
-    setTimeout(() => {
-      onAuthSuccess(foundUser);
-    }, 600);
   };
 
   return (
-    <div id="auth_suite_screen" className="min-h-screen bg-slate-900 text-slate-100 flex flex-col justify-center items-center px-4 py-8 font-sans overflow-y-auto">
+    <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col justify-center items-center px-4 py-8 font-sans relative overflow-x-hidden">
       
-      {/* Code Simulator Alerts (Top Center banner) */}
-      <AnimatePresence>
-        {mode === "verification" && generatedVerifCode && (
-          <motion.div
-            initial={{ opacity: 0, y: -50 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -50 }}
-            className="fixed top-4 left-4 right-4 sm:left-auto sm:right-4 sm:max-w-md bg-blue-950 border border-blue-500/30 p-4 rounded-xl shadow-2xl z-50 flex gap-3 text-sm text-blue-200"
-          >
-            <div className="p-2 bg-blue-500/20 text-blue-400 rounded-lg shrink-0 h-10 w-10 flex items-center justify-center">
-              <Mail className="h-5 w-5" />
-            </div>
-            <div>
-              <p className="font-bold text-white flex items-center gap-1.5 text-xs uppercase tracking-wide">
-                <Sparkles className="h-3 w-3 text-yellow-400" /> Simulateur de SMS & Email CI
-              </p>
-              <p className="text-xs text-slate-300 mt-1">
-                Code de vérification envoyé à <span className="text-blue-300 font-semibold">{verifEmail}</span>:
-              </p>
-              <div className="flex items-center gap-2 mt-2">
-                <span className="bg-slate-950 px-3 py-1 rounded text-lg font-mono font-bold text-yellow-400 tracking-wider">
-                  {generatedVerifCode}
-                </span>
-                <span className="text-[10px] text-slate-400">
-                  (ou tapez <span className="font-mono text-white">123456</span>)
-                </span>
-              </div>
-            </div>
-          </motion.div>
-        )}
-
-        {mode === "forgot_password" && forgotStep === 2 && generatedForgotCode && (
-          <motion.div
-            initial={{ opacity: 0, y: -50 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -50 }}
-            className="fixed top-4 left-4 right-4 sm:left-auto sm:right-4 sm:max-w-md bg-amber-950 border border-amber-500/30 p-4 rounded-xl shadow-2xl z-50 flex gap-3 text-sm text-amber-200"
-          >
-            <div className="p-2 bg-amber-500/20 text-amber-400 rounded-lg shrink-0 h-10 w-10 flex items-center justify-center">
-              <KeyRound className="h-5 w-5" />
-            </div>
-            <div>
-              <p className="font-bold text-white flex items-center gap-1.5 text-xs uppercase tracking-wide">
-                🔑 Code de récupération BAC
-              </p>
-              <p className="text-xs text-slate-300 mt-1">
-                Saisissez ce code temporaire pour restaurer vos données :
-              </p>
-              <div className="flex items-center gap-2 mt-2">
-                <span className="bg-slate-950 px-3 py-1 rounded text-lg font-mono font-bold text-amber-400 tracking-wider">
-                  {generatedForgotCode}
-                </span>
-                <span className="text-[10px] text-slate-400">
-                  (ou tapez <span className="font-mono text-white">123456</span>)
-                </span>
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* Background Subtle Gradient Blobs */}
+      <div className="absolute top-1/4 -left-20 w-80 h-80 bg-blue-600/15 rounded-full blur-3xl pointer-events-none"></div>
+      <div className="absolute bottom-1/4 -right-20 w-80 h-80 bg-indigo-600/15 rounded-full blur-3xl pointer-events-none"></div>
 
       <AnimatePresence mode="wait">
-        {/* 1. SPLASH SCREEN */}
-        {mode === "splash" && (
-          <motion.div
-            key="splash"
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, y: -20 }}
-            transition={{ duration: 0.4 }}
-            className="text-center flex flex-col items-center justify-center max-w-sm w-full"
-          >
-            <div className="relative">
-              <div className="absolute inset-0 bg-blue-600/30 rounded-3xl blur-2xl animate-pulse"></div>
-              <div className="relative bg-gradient-to-br from-blue-600 to-blue-800 p-6 rounded-3xl text-white shadow-2xl border border-blue-500/40">
-                <BookOpen className="h-16 w-16 animate-bounce" />
-              </div>
-            </div>
-
-            <h1 className="text-4xl font-extrabold text-white mt-6 tracking-tight">
-              EduMentor
-            </h1>
-            <p className="text-blue-400 font-semibold text-xs tracking-widest uppercase mt-2">
-              Côte d'Ivoire · BAC 2026-2027
-            </p>
-
-            {/* Spinner Progress bar */}
-            <div className="w-48 h-1 bg-slate-800 rounded-full mt-10 overflow-hidden">
-              <motion.div
-                className="h-full bg-blue-500"
-                initial={{ width: "0%" }}
-                animate={{ width: "100%" }}
-                transition={{ duration: 1.4, ease: "easeInOut" }}
-              />
-            </div>
-            <p className="text-slate-500 text-[11px] font-mono mt-2 animate-pulse">
-              Sécurisation de la session et synchronisation...
-            </p>
-          </motion.div>
-        )}
-
-        {/* 2. WELCOME / LANDING SCREEN */}
+        
+        {/* 1. WELCOME SCREEN */}
         {mode === "welcome" && (
           <motion.div
             key="welcome"
             initial={{ opacity: 0, y: 15 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -15 }}
-            className="max-w-md w-full bg-slate-950 p-8 rounded-2xl shadow-2xl border border-slate-800 text-center flex flex-col items-center relative overflow-hidden"
+            className="max-w-md w-full bg-slate-950/90 backdrop-blur-xl p-8 rounded-3xl shadow-2xl border border-slate-800/80 text-center flex flex-col items-center relative overflow-hidden"
           >
-            {/* Ambient background decoration */}
-            <div className="absolute top-[-30%] left-[-20%] w-60 h-60 bg-blue-600/10 rounded-full blur-3xl"></div>
-            <div className="absolute bottom-[-30%] right-[-20%] w-60 h-60 bg-purple-600/10 rounded-full blur-3xl"></div>
-
+            {/* Secret Logo Click Area */}
             <div 
               onClick={() => {
                 setLogoClicks(prev => {
                   const next = prev + 1;
                   if (next >= 5) {
                     setMode("admin_login");
-                    setLoginError("");
+                    setAdminError("");
                     return 0;
                   }
                   return next;
                 });
               }}
-              className="bg-gradient-to-br from-blue-600 to-indigo-700 p-4 rounded-2xl text-white shadow-xl shadow-blue-500/20 mb-4 cursor-pointer select-none active:scale-95 transition-transform"
+              className="cursor-pointer select-none py-2 transition-transform active:scale-95"
+              title="EduMentor"
             >
-              <BookOpen className="h-10 w-10" />
+              <EduMentorLogo variant="square" size="xl" theme="dark" showTagline={false} />
             </div>
 
-            <h2 className="text-3xl font-extrabold text-white tracking-tight">
-              EduMentor <span className="text-blue-500 text-xl font-bold bg-blue-950 px-2 py-0.5 rounded border border-blue-800">CI</span>
-            </h2>
-            <p className="text-slate-400 text-sm font-medium mt-2 max-w-sm">
-              Révise intelligemment les programmes de Seconde, Première et Terminale avec l'intelligence artificielle ivoirienne.
+            <div className="mt-4 space-y-1">
+              <h1 className="text-3xl font-black font-heading text-white tracking-tight">
+                Edu<span className="text-blue-500">Mentor</span>
+              </h1>
+              <p className="text-xs font-bold uppercase tracking-widest text-amber-400">
+                L'Excellence Scolaire Intelligente
+              </p>
+            </div>
+
+            <p className="text-slate-400 text-sm font-medium mt-3 leading-relaxed">
+              Votre plateforme d'apprentissage connectée à Cloud Firestore et propulsée par l'IA Gemini.
             </p>
 
-            <div className="w-full space-y-3.5 mt-8">
+            {/* Feature Pills */}
+            <div className="grid grid-cols-3 gap-2 w-full my-6 text-[11px] font-bold text-slate-300">
+              <div className="bg-slate-900/80 border border-slate-800 p-2.5 rounded-xl flex flex-col items-center gap-1">
+                <GraduationCap className="w-4 h-4 text-blue-400" />
+                <span>Programme officiel</span>
+              </div>
+              <div className="bg-slate-900/80 border border-slate-800 p-2.5 rounded-xl flex flex-col items-center gap-1">
+                <Award className="w-4 h-4 text-emerald-400" />
+                <span>Quiz & BAC</span>
+              </div>
+              <div className="bg-slate-900/80 border border-slate-800 p-2.5 rounded-xl flex flex-col items-center gap-1">
+                <BrainCircuit className="w-4 h-4 text-amber-400" />
+                <span>Tuteur IA</span>
+              </div>
+            </div>
+
+            {/* Action buttons */}
+            <div className="w-full space-y-3">
               <button
                 onClick={() => setMode("login")}
-                className="w-full py-3 px-4 border border-transparent text-sm font-bold rounded-xl text-white bg-blue-600 hover:bg-blue-700 shadow-md shadow-blue-500/15 transition-all transform hover:scale-[1.01]"
+                className="w-full py-3.5 px-4 text-sm font-bold rounded-2xl text-white bg-blue-600 hover:bg-blue-500 shadow-lg shadow-blue-600/25 transition-all transform hover:scale-[1.01]"
               >
                 Se Connecter
               </button>
               <button
                 onClick={() => setMode("register")}
-                className="w-full py-3 px-4 border border-slate-800 text-sm font-bold rounded-xl text-slate-300 bg-slate-900/50 hover:bg-slate-800/80 hover:text-white transition-all border-solid"
+                className="w-full py-3.5 px-4 text-sm font-bold rounded-2xl text-slate-300 bg-slate-900 hover:bg-slate-800/80 hover:text-white transition-all border border-slate-800"
               >
                 Créer un compte élève
               </button>
             </div>
-
-            <p className="text-slate-600 text-[10px] font-mono mt-6">
-              Sécurisé par protocole EduMentor v3.2.0 · 2026-2027
-            </p>
           </motion.div>
         )}
 
-        {/* 3. LOGIN SCREEN */}
+        {/* 2. LOGIN SCREEN */}
         {mode === "login" && (
           <motion.div
             key="login"
             initial={{ opacity: 0, y: 15 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -15 }}
-            className="max-w-md w-full bg-slate-950 p-8 rounded-2xl shadow-2xl border border-slate-800 relative"
+            className="max-w-md w-full bg-slate-950/90 backdrop-blur-xl p-8 rounded-3xl shadow-2xl border border-slate-800/80 relative"
           >
             <button
               onClick={() => setMode("welcome")}
@@ -600,29 +418,25 @@ export default function AuthScreenSuite({ onAuthSuccess }: AuthScreenSuiteProps)
               <ArrowLeft className="h-5 w-5" />
             </button>
 
-            <div className="text-center mt-2">
-              <div className="flex justify-center mb-3">
-                <div className="bg-blue-600/10 p-3 rounded-2xl text-blue-500 border border-blue-500/20">
-                  <ShieldCheck className="h-8 w-8" />
-                </div>
-              </div>
-              <h2 className="text-2xl font-extrabold text-white tracking-tight">
-                Bon retour d'études !
+            <div className="text-center mt-2 flex flex-col items-center">
+              <EduMentorLogo variant="icon-only" size="lg" theme="dark" />
+              <h2 className="text-2xl font-black font-heading text-white tracking-tight mt-3">
+                Connexion Élève
               </h2>
-              <p className="text-slate-400 text-xs mt-1">
-                Saisis tes identifiants pour continuer tes entraînements.
+              <p className="text-slate-400 text-xs font-medium mt-1">
+                Saisissez vos identifiants pour accéder à vos cours.
               </p>
             </div>
 
             {loginError && (
-              <div className="mt-4 bg-red-950/50 border border-red-500/30 text-red-200 p-3 rounded-xl flex items-center gap-2 text-xs">
+              <div className="mt-4 bg-red-950/60 border border-red-500/30 text-red-200 p-3 rounded-xl flex items-center gap-2 text-xs font-medium">
                 <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
                 <span>{loginError}</span>
               </div>
             )}
 
             {loginSuccess && (
-              <div className="mt-4 bg-emerald-950/50 border border-emerald-500/30 text-emerald-200 p-3 rounded-xl flex items-center gap-2 text-xs">
+              <div className="mt-4 bg-emerald-950/60 border border-emerald-500/30 text-emerald-200 p-3 rounded-xl flex items-center gap-2 text-xs font-medium">
                 <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
                 <span>{loginSuccess}</span>
               </div>
@@ -630,81 +444,63 @@ export default function AuthScreenSuite({ onAuthSuccess }: AuthScreenSuiteProps)
 
             <form className="mt-6 space-y-4" onSubmit={handleLoginSubmit}>
               <div>
-                <label htmlFor="login_email_input" className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">
+                <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5">
                   Adresse e-mail
                 </label>
                 <div className="relative">
-                  <Mail className="absolute left-3 top-3 h-4 w-4 text-slate-500" />
+                  <Mail className="absolute left-3.5 top-3 h-4 w-4 text-slate-500" />
                   <input
-                    id="login_email_input"
                     type="email"
                     required
-                    placeholder="amani.koffi@edu.ci"
+                    placeholder="votre.email@exemple.ci"
                     value={loginEmail}
                     onChange={(e) => setLoginEmail(e.target.value)}
-                    className="w-full pl-9 pr-3 py-2 border border-slate-800 placeholder-slate-600 text-white rounded-xl bg-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 text-sm font-semibold"
+                    className="w-full pl-10 pr-3.5 py-2.5 border border-slate-800 placeholder-slate-600 text-white rounded-xl bg-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 text-sm font-medium"
                   />
                 </div>
               </div>
 
               <div>
-                <label htmlFor="login_password_input" className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">
+                <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5">
                   Mot de passe
                 </label>
                 <div className="relative">
-                  <Lock className="absolute left-3 top-3 h-4 w-4 text-slate-500" />
+                  <Lock className="absolute left-3.5 top-3 h-4 w-4 text-slate-500" />
                   <input
-                    id="login_password_input"
                     type="password"
                     required
                     placeholder="••••••••••••"
                     value={loginPassword}
                     onChange={(e) => setLoginPassword(e.target.value)}
-                    className="w-full pl-9 pr-3 py-2 border border-slate-800 placeholder-slate-600 text-white rounded-xl bg-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 text-sm"
+                    className="w-full pl-10 pr-3.5 py-2.5 border border-slate-800 placeholder-slate-600 text-white rounded-xl bg-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 text-sm"
                   />
                 </div>
-              </div>
-
-              <div className="flex items-center justify-between pt-1">
-                <div className="flex items-center">
-                  <input
-                    id="remember_me_suite"
-                    type="checkbox"
-                    className="h-4 w-4 bg-slate-900 text-blue-600 focus:ring-blue-500 border-slate-800 rounded"
-                    checked={rememberMe}
-                    onChange={(e) => setRememberMe(e.target.checked)}
-                  />
-                  <label htmlFor="remember_me_suite" className="ml-2 block text-xs font-semibold text-slate-400 select-none">
-                    Rester connecté
-                  </label>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMode("forgot_password");
-                    setForgotStep(1);
-                  }}
-                  className="text-xs font-bold text-blue-500 hover:text-blue-400 transition-colors focus:outline-none"
-                >
-                  Mot de passe oublié ?
-                </button>
               </div>
 
               <button
                 type="submit"
-                className="w-full py-3 px-4 border border-transparent text-sm font-bold rounded-xl text-white bg-blue-600 hover:bg-blue-700 shadow-md shadow-blue-500/10 transition-colors mt-6 flex items-center justify-center gap-2"
+                disabled={isLoading}
+                className="w-full py-3.5 px-4 text-sm font-bold rounded-2xl text-white bg-blue-600 hover:bg-blue-500 shadow-lg shadow-blue-600/20 transition-all mt-6 flex items-center justify-center gap-2 disabled:opacity-50"
               >
-                Se connecter <ArrowRight className="h-4 w-4" />
+                {isLoading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span>Vérification...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>Se connecter</span> <ArrowRight className="h-4 w-4" />
+                  </>
+                )}
               </button>
             </form>
 
             <div className="text-center mt-6 pt-4 border-t border-slate-900">
               <p className="text-xs text-slate-500">
-                Nouveau sur la plateforme ?{" "}
+                Nouveau sur EduMentor ?{" "}
                 <button
                   onClick={() => setMode("register")}
-                  className="font-bold text-blue-500 hover:text-blue-400 focus:outline-none transition-colors"
+                  className="font-bold text-blue-400 hover:underline"
                 >
                   S'inscrire maintenant
                 </button>
@@ -713,14 +509,14 @@ export default function AuthScreenSuite({ onAuthSuccess }: AuthScreenSuiteProps)
           </motion.div>
         )}
 
-        {/* 4. REGISTER SCREEN */}
+        {/* 3. REGISTER SCREEN */}
         {mode === "register" && (
           <motion.div
             key="register"
             initial={{ opacity: 0, y: 15 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -15 }}
-            className="max-w-md w-full bg-slate-950 p-8 rounded-2xl shadow-2xl border border-slate-800 relative"
+            className="max-w-md w-full bg-slate-950/90 backdrop-blur-xl p-8 rounded-3xl shadow-2xl border border-slate-800/80 relative my-4"
           >
             <button
               onClick={() => setMode("welcome")}
@@ -729,82 +525,79 @@ export default function AuthScreenSuite({ onAuthSuccess }: AuthScreenSuiteProps)
               <ArrowLeft className="h-5 w-5" />
             </button>
 
-            <div className="text-center mt-2">
-              <h2 className="text-2xl font-extrabold text-white tracking-tight">
-                Rejoins l'excellence
+            <div className="text-center mt-2 flex flex-col items-center">
+              <EduMentorLogo variant="icon-only" size="md" theme="dark" />
+              <h2 className="text-2xl font-black font-heading text-white tracking-tight mt-2">
+                Inscription Élève
               </h2>
-              <p className="text-slate-400 text-xs mt-1">
-                Profite d'un bonus d'inscription de +100 XP à la validation !
+              <p className="text-slate-400 text-xs font-medium mt-1">
+                Configurez votre profil d'apprentissage personnalisé.
               </p>
             </div>
 
             {regError && (
-              <div className="mt-4 bg-red-950/50 border border-red-500/30 text-red-200 p-3 rounded-xl flex items-center gap-2 text-xs">
+              <div className="mt-4 bg-red-950/60 border border-red-500/30 text-red-200 p-3 rounded-xl flex items-center gap-2 text-xs font-medium">
                 <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
                 <span>{regError}</span>
               </div>
             )}
 
-            <form className="mt-6 space-y-4" onSubmit={handleRegisterSubmit}>
+            <form className="mt-5 space-y-3.5" onSubmit={handleRegisterSubmit}>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label htmlFor="reg_lastname" className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">
-                    Nom <span className="text-red-500">*</span>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                    Nom <span className="text-red-400">*</span>
                   </label>
                   <input
-                    id="reg_lastname"
                     type="text"
                     required
-                    placeholder="Ex: Koffi"
+                    placeholder="Nom"
                     value={regLastName}
                     onChange={(e) => setRegLastName(e.target.value)}
-                    className="w-full px-3.5 py-2 border border-slate-800 placeholder-slate-650 text-white rounded-xl bg-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 text-sm font-semibold"
+                    className="w-full px-3.5 py-2 border border-slate-800 placeholder-slate-600 text-white rounded-xl bg-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 text-xs font-medium"
                   />
                 </div>
                 <div>
-                  <label htmlFor="reg_firstname" className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">
-                    Prénom <span className="text-red-500">*</span>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                    Prénom <span className="text-red-400">*</span>
                   </label>
                   <input
-                    id="reg_firstname"
                     type="text"
                     required
-                    placeholder="Ex: Amani"
+                    placeholder="Prénom"
                     value={regFirstName}
                     onChange={(e) => setRegFirstName(e.target.value)}
-                    className="w-full px-3.5 py-2 border border-slate-800 placeholder-slate-650 text-white rounded-xl bg-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 text-sm font-semibold"
+                    className="w-full px-3.5 py-2 border border-slate-800 placeholder-slate-600 text-white rounded-xl bg-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 text-xs font-medium"
                   />
                 </div>
               </div>
 
               <div>
-                <label htmlFor="reg_email" className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">
-                  Adresse e-mail <span className="text-red-500">*</span>
+                <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                  Adresse e-mail <span className="text-red-400">*</span>
                 </label>
                 <div className="relative">
-                  <Mail className="absolute left-3 top-3 h-4 w-4 text-slate-500" />
+                  <Mail className="absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
                   <input
-                    id="reg_email"
                     type="email"
                     required
-                    placeholder="amani.koffi@edu.ci"
+                    placeholder="eleve@exemple.ci"
                     value={regEmail}
                     onChange={(e) => setRegEmail(e.target.value)}
-                    className="w-full pl-9 pr-3 py-2 border border-slate-800 placeholder-slate-650 text-white rounded-xl bg-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 text-sm font-semibold"
+                    className="w-full pl-9 pr-3 py-2 border border-slate-800 placeholder-slate-600 text-white rounded-xl bg-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 text-xs font-medium"
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label htmlFor="reg_grade" className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">
-                    Niveau / Classe
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                    Niveau <span className="text-red-400">*</span>
                   </label>
                   <select
-                    id="reg_grade"
                     value={regGrade}
                     onChange={(e) => setRegGrade(e.target.value as Grade)}
-                    className="w-full px-3 py-2 border border-slate-800 text-white bg-slate-900 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-600 text-sm font-semibold"
+                    className="w-full px-3 py-2 border border-slate-800 text-white bg-slate-900 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-600 text-xs font-medium"
                   >
                     <option value="2nde">Seconde (2nde)</option>
                     <option value="1ère">Première (1ère)</option>
@@ -813,14 +606,13 @@ export default function AuthScreenSuite({ onAuthSuccess }: AuthScreenSuiteProps)
                 </div>
 
                 <div>
-                  <label htmlFor="reg_serie" className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">
-                    Série d'études
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                    Série <span className="text-red-400">*</span>
                   </label>
                   <select
-                    id="reg_serie"
                     value={regSerie}
                     onChange={(e) => setRegSerie(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-800 text-white bg-slate-900 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-600 text-sm font-semibold"
+                    className="w-full px-3 py-2 border border-slate-800 text-white bg-slate-900 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-600 text-xs font-medium"
                   >
                     <option value="Série A1">Série A1</option>
                     <option value="Série A2">Série A2</option>
@@ -832,97 +624,102 @@ export default function AuthScreenSuite({ onAuthSuccess }: AuthScreenSuiteProps)
               </div>
 
               <div>
-                <label htmlFor="reg_schoolname" className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">
-                  Établissement scolaire <span className="text-red-500">*</span>
+                <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                  Établissement scolaire <span className="text-red-400">*</span>
                 </label>
-                <input
-                  id="reg_schoolname"
-                  type="text"
-                  required
-                  placeholder="Ex: Lycée Classique d'Abidjan"
-                  value={regSchoolName}
-                  onChange={(e) => setRegSchoolName(e.target.value)}
-                  className="w-full px-3.5 py-2 border border-slate-800 placeholder-slate-650 text-white rounded-xl bg-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 text-sm font-semibold"
-                />
+                <div className="relative">
+                  <Building className="absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
+                  <input
+                    type="text"
+                    required
+                    placeholder="Nom de votre établissement"
+                    value={regSchoolName}
+                    onChange={(e) => setRegSchoolName(e.target.value)}
+                    className="w-full pl-9 pr-3 py-2 border border-slate-800 placeholder-slate-600 text-white rounded-xl bg-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 text-xs font-medium"
+                  />
+                </div>
               </div>
 
               <div>
-                <label htmlFor="reg_password" className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">
-                  Créer un mot de passe <span className="text-red-500">*</span>
+                <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                  Mot de passe <span className="text-red-400">*</span>
                 </label>
                 <div className="relative">
-                  <Lock className="absolute left-3 top-3 h-4 w-4 text-slate-500" />
+                  <Lock className="absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
                   <input
-                    id="reg_password"
                     type="password"
                     required
                     placeholder="••••••••"
                     value={regPassword}
                     onChange={(e) => setRegPassword(e.target.value)}
-                    className="w-full pl-9 pr-3 py-2 border border-slate-800 placeholder-slate-600 text-white rounded-xl bg-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 text-sm"
+                    className="w-full pl-9 pr-3 py-2 border border-slate-800 placeholder-slate-600 text-white rounded-xl bg-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 text-xs"
                   />
                 </div>
-
-                {/* Password strength visualizer */}
-                <div className="mt-2 flex items-center justify-between text-[10px] font-bold">
+                <div className="mt-1.5 flex items-center justify-between text-[10px] font-bold">
                   <div className="w-1/2 h-1 bg-slate-800 rounded-full overflow-hidden">
                     <div
                       className={`h-full transition-all duration-300 ${passwordStrength.color}`}
                       style={{ width: `${(passwordStrength.score / 5) * 100}%` }}
                     />
                   </div>
-                  <span className={`${passwordStrength.textColor}`}>
+                  <span className={passwordStrength.textColor}>
                     {passwordStrength.label}
                   </span>
                 </div>
               </div>
 
               <div>
-                <label htmlFor="reg_confirm" className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">
-                  Confirmer le mot de passe <span className="text-red-500">*</span>
+                <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                  Confirmer mot de passe <span className="text-red-400">*</span>
                 </label>
                 <div className="relative">
-                  <Lock className="absolute left-3 top-3 h-4 w-4 text-slate-500" />
+                  <Lock className="absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
                   <input
-                    id="reg_confirm"
                     type="password"
                     required
                     placeholder="••••••••"
                     value={regConfirmPassword}
                     onChange={(e) => setRegConfirmPassword(e.target.value)}
-                    className="w-full pl-9 pr-3 py-2 border border-slate-800 placeholder-slate-600 text-white rounded-xl bg-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 text-sm"
+                    className="w-full pl-9 pr-3 py-2 border border-slate-800 placeholder-slate-600 text-white rounded-xl bg-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 text-xs"
                   />
                 </div>
               </div>
 
               <div className="flex items-start gap-2 pt-1">
                 <input
-                  id="reg_terms"
                   type="checkbox"
                   required
                   className="h-4 w-4 bg-slate-900 border-slate-800 text-blue-600 focus:ring-blue-500 rounded mt-0.5"
                   checked={regAcceptTerms}
                   onChange={(e) => setRegAcceptTerms(e.target.checked)}
                 />
-                <label htmlFor="reg_terms" className="text-[11px] font-semibold text-slate-400 leading-tight select-none">
-                  Je consens à l'utilisation d'EduMentor CI et m'engage à suivre le programme scolaire officiel.
+                <label className="text-[11px] font-medium text-slate-400 leading-tight select-none">
+                  Je m'engage à respecter les règles d'utilisation d'EduMentor.
                 </label>
               </div>
 
               <button
                 type="submit"
-                className="w-full py-3 px-4 border border-transparent text-sm font-bold rounded-xl text-white bg-blue-600 hover:bg-blue-700 shadow-md shadow-blue-500/10 transition-colors mt-6"
+                disabled={isLoading}
+                className="w-full py-3 px-4 text-sm font-bold rounded-2xl text-white bg-blue-600 hover:bg-blue-500 shadow-lg shadow-blue-600/20 transition-all mt-4 flex items-center justify-center gap-2 disabled:opacity-50"
               >
-                Créer mon compte
+                {isLoading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span>Création du compte...</span>
+                  </>
+                ) : (
+                  <span>Créer mon compte EduMentor</span>
+                )}
               </button>
             </form>
 
-            <div className="text-center mt-6 pt-4 border-t border-slate-900">
+            <div className="text-center mt-5 pt-3 border-t border-slate-900">
               <p className="text-xs text-slate-500">
                 Déjà inscrit ?{" "}
                 <button
                   onClick={() => setMode("login")}
-                  className="font-bold text-blue-500 hover:text-blue-400 focus:outline-none transition-colors"
+                  className="font-bold text-blue-400 hover:underline"
                 >
                   Se connecter
                 </button>
@@ -931,256 +728,14 @@ export default function AuthScreenSuite({ onAuthSuccess }: AuthScreenSuiteProps)
           </motion.div>
         )}
 
-        {/* 5. VERIFICATION SCREEN */}
-        {mode === "verification" && (
-          <motion.div
-            key="verification"
-            initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -15 }}
-            className="max-w-md w-full bg-slate-950 p-8 rounded-2xl shadow-2xl border border-slate-800 relative"
-          >
-            <div className="text-center">
-              <div className="flex justify-center mb-3">
-                <div className="bg-yellow-500/10 p-3 rounded-2xl text-yellow-500 border border-yellow-500/20">
-                  <Mail className="h-8 w-8" />
-                </div>
-              </div>
-              <h2 className="text-2xl font-extrabold text-white tracking-tight">
-                Vérification e-mail 📩
-              </h2>
-              <p className="text-slate-400 text-xs mt-1">
-                Saisis le code de validation reçu pour authentifier ta session.
-              </p>
-              <p className="text-slate-500 text-xs font-semibold mt-2 bg-slate-900 p-2 rounded-lg border border-slate-800 font-mono inline-block">
-                {verifEmail}
-              </p>
-            </div>
-
-            {verifError && (
-              <div className="mt-4 bg-red-950/50 border border-red-500/30 text-red-200 p-3 rounded-xl flex items-center gap-2 text-xs">
-                <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
-                <span>{verifError}</span>
-              </div>
-            )}
-
-            {verifSuccess && (
-              <div className="mt-4 bg-emerald-950/50 border border-emerald-500/30 text-emerald-200 p-3 rounded-xl flex items-center gap-2 text-xs">
-                <Check className="h-4 w-4 shrink-0 text-emerald-400" />
-                <span>{verifSuccess}</span>
-              </div>
-            )}
-
-            <form className="mt-6 space-y-4" onSubmit={handleVerificationSubmit}>
-              <div>
-                <label htmlFor="verif_code_input" className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-1 text-center">
-                  Saisis ton code à 6 chiffres
-                </label>
-                <input
-                  id="verif_code_input"
-                  type="text"
-                  required
-                  placeholder="EX: 482915"
-                  maxLength={6}
-                  value={verifInputCode}
-                  onChange={(e) => setVerifInputCode(e.target.value.replace(/\D/g, ""))}
-                  className="w-full text-center tracking-[0.5em] font-mono font-extrabold text-2xl py-3 border border-slate-800 placeholder-slate-700 text-yellow-400 bg-slate-900 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-600"
-                />
-              </div>
-
-              <button
-                type="submit"
-                className="w-full py-3 px-4 border border-transparent text-sm font-bold rounded-xl text-white bg-blue-600 hover:bg-blue-700 shadow-md shadow-blue-500/10 transition-colors mt-6"
-              >
-                Vérifier mon adresse e-mail
-              </button>
-            </form>
-
-            <div className="text-center mt-6 pt-4 border-t border-slate-900">
-              <button
-                type="button"
-                onClick={() => {
-                  // Resend simulation
-                  const code = Math.floor(100000 + Math.random() * 900000).toString();
-                  setGeneratedVerifCode(code);
-                  setVerifError("");
-                  setVerifSuccess("Nouveau code de simulation renvoyé !");
-                }}
-                className="text-xs text-blue-500 font-bold hover:text-blue-400 focus:outline-none"
-              >
-                Renvoyer le code
-              </button>
-            </div>
-          </motion.div>
-        )}
-
-        {/* 6. FORGOT PASSWORD SCREEN */}
-        {mode === "forgot_password" && (
-          <motion.div
-            key="forgot_password"
-            initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -15 }}
-            className="max-w-md w-full bg-slate-950 p-8 rounded-2xl shadow-2xl border border-slate-800 relative"
-          >
-            <button
-              onClick={() => {
-                if (forgotStep === 1) {
-                  setMode("login");
-                } else {
-                  setForgotStep((p) => Math.max(1, p - 1));
-                }
-              }}
-              className="absolute left-6 top-6 text-slate-400 hover:text-white transition-colors"
-            >
-              <ArrowLeft className="h-5 w-5" />
-            </button>
-
-            <div className="text-center mt-2">
-              <h2 className="text-2xl font-extrabold text-white tracking-tight">
-                Restauration de compte
-              </h2>
-              <p className="text-slate-400 text-xs mt-1">
-                {forgotStep === 1 && "Saisis ton adresse e-mail pour recevoir un code temporaire de récupération."}
-                {forgotStep === 2 && "Saisis le code de restauration envoyé dans ton alerte."}
-                {forgotStep === 3 && "Définis ton nouveau mot de passe scolaire sécurisé."}
-                {forgotStep === 4 && "Félicitations, ta restauration est terminée !"}
-              </p>
-            </div>
-
-            {forgotError && (
-              <div className="mt-4 bg-red-950/50 border border-red-500/30 text-red-200 p-3 rounded-xl flex items-center gap-2 text-xs">
-                <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
-                <span>{forgotError}</span>
-              </div>
-            )}
-
-            {forgotStep === 1 && (
-              <form className="mt-6 space-y-4" onSubmit={handleForgotEmailSubmit}>
-                <div>
-                  <label htmlFor="forgot_email_input" className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">
-                    Adresse e-mail enregistrée
-                  </label>
-                  <input
-                    id="forgot_email_input"
-                    type="email"
-                    required
-                    placeholder="Ex: amani.koffi@edu.ci"
-                    value={forgotEmail}
-                    onChange={(e) => setForgotEmail(e.target.value)}
-                    className="w-full px-3.5 py-2 border border-slate-800 placeholder-slate-650 text-white rounded-xl bg-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 text-sm font-semibold"
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  className="w-full py-3 px-4 border border-transparent text-sm font-bold rounded-xl text-white bg-blue-600 hover:bg-blue-700 shadow-md shadow-blue-500/10 transition-colors mt-6"
-                >
-                  Envoyer le code de restauration
-                </button>
-              </form>
-            )}
-
-            {forgotStep === 2 && (
-              <form className="mt-6 space-y-4" onSubmit={handleForgotCodeSubmit}>
-                <div>
-                  <label htmlFor="forgot_code_input" className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-1 text-center">
-                    Saisis le code à 6 chiffres
-                  </label>
-                  <input
-                    id="forgot_code_input"
-                    type="text"
-                    required
-                    placeholder="Ex: 987654"
-                    maxLength={6}
-                    value={forgotCode}
-                    onChange={(e) => setForgotCode(e.target.value.replace(/\D/g, ""))}
-                    className="w-full text-center tracking-[0.5em] font-mono font-extrabold text-2xl py-3 border border-slate-800 placeholder-slate-700 text-amber-400 bg-slate-900 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-600"
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  className="w-full py-3 px-4 border border-transparent text-sm font-bold rounded-xl text-white bg-blue-600 hover:bg-blue-700 shadow-md shadow-blue-500/10 transition-colors mt-6"
-                >
-                  Vérifier le code
-                </button>
-              </form>
-            )}
-
-            {forgotStep === 3 && (
-              <form className="mt-6 space-y-4" onSubmit={handleForgotNewPasswordSubmit}>
-                <div>
-                  <label htmlFor="forgot_new_pass" className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">
-                    Nouveau mot de passe
-                  </label>
-                  <input
-                    id="forgot_new_pass"
-                    type="password"
-                    required
-                    placeholder="Minimum 6 caractères"
-                    value={forgotNewPassword}
-                    onChange={(e) => setForgotNewPassword(e.target.value)}
-                    className="w-full px-3.5 py-2 border border-slate-800 placeholder-slate-650 text-white rounded-xl bg-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 text-sm"
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="forgot_new_pass_confirm" className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">
-                    Confirmer le mot de passe
-                  </label>
-                  <input
-                    id="forgot_new_pass_confirm"
-                    type="password"
-                    required
-                    placeholder="••••••••"
-                    value={forgotConfirmPassword}
-                    onChange={(e) => setForgotConfirmPassword(e.target.value)}
-                    className="w-full px-3.5 py-2 border border-slate-800 placeholder-slate-650 text-white rounded-xl bg-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 text-sm"
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  className="w-full py-3 px-4 border border-transparent text-sm font-bold rounded-xl text-white bg-blue-600 hover:bg-blue-700 shadow-md shadow-blue-500/10 transition-colors mt-6"
-                >
-                  Enregistrer le nouveau mot de passe
-                </button>
-              </form>
-            )}
-
-            {forgotStep === 4 && (
-              <div className="mt-8 text-center space-y-6">
-                <div className="flex justify-center">
-                  <div className="bg-emerald-500/10 p-4 rounded-full text-emerald-500 border border-emerald-500/20">
-                    <CheckCircle2 className="h-12 w-12" />
-                  </div>
-                </div>
-                <p className="text-slate-300 text-sm font-semibold">
-                  Votre mot de passe a été modifié avec succès. Vous pouvez maintenant vous connecter en toute sécurité.
-                </p>
-                <button
-                  onClick={() => {
-                    setMode("login");
-                    setForgotStep(1);
-                  }}
-                  className="w-full py-3 px-4 border border-transparent text-sm font-bold rounded-xl text-white bg-blue-600 hover:bg-blue-700 transition-colors shadow-md shadow-blue-500/10"
-                >
-                  Retourner à la connexion
-                </button>
-              </div>
-            )}
-          </motion.div>
-        )}
-
-        {/* 7. SECURE ADMIN LOGIN SCREEN */}
+        {/* 4. SECRET ADMIN LOGIN SCREEN (5 CLICKS ON LOGO) */}
         {mode === "admin_login" && (
           <motion.div
             key="admin_login"
             initial={{ opacity: 0, y: 15 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -15 }}
-            className="max-w-md w-full bg-slate-950 p-8 rounded-2xl shadow-2xl border-2 border-red-500/30 relative"
+            className="max-w-md w-full bg-slate-950/95 backdrop-blur-xl p-8 rounded-3xl shadow-2xl border border-amber-500/30 relative"
           >
             <button
               onClick={() => setMode("welcome")}
@@ -1189,90 +744,78 @@ export default function AuthScreenSuite({ onAuthSuccess }: AuthScreenSuiteProps)
               <ArrowLeft className="h-5 w-5" />
             </button>
 
-            <div className="text-center mt-2">
-              <div className="flex justify-center mb-3">
-                <div className="bg-red-500/10 p-3 rounded-2xl text-red-500 border border-red-500/20">
-                  <ShieldCheck className="h-8 w-8" />
-                </div>
+            <div className="text-center mt-2 flex flex-col items-center">
+              <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-2xl text-amber-400 mb-2">
+                <ShieldCheck className="h-8 w-8" />
               </div>
-              <h2 className="text-2xl font-extrabold text-white tracking-tight">
-                Portail Administration
+              <h2 className="text-2xl font-black font-heading text-white tracking-tight">
+                Espace Administration
               </h2>
-              <p className="text-slate-400 text-xs mt-1">
-                Connexion sécurisée réservée exclusivement aux administrateurs d'EduMentor CI.
+              <p className="text-slate-400 text-xs font-medium mt-1">
+                Authentification réservée au personnel administratif autorisé.
               </p>
             </div>
 
-            {loginError && (
-              <div className="mt-4 bg-red-950/50 border border-red-500/30 text-red-200 p-3 rounded-xl flex items-center gap-2 text-xs">
+            {adminError && (
+              <div className="mt-4 bg-red-950/60 border border-red-500/30 text-red-200 p-3 rounded-xl flex items-center gap-2 text-xs font-medium">
                 <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
-                <span>{loginError}</span>
-              </div>
-            )}
-
-            {loginSuccess && (
-              <div className="mt-4 bg-emerald-950/50 border border-emerald-500/30 text-emerald-200 p-3 rounded-xl flex items-center gap-2 text-xs">
-                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
-                <span>{loginSuccess}</span>
+                <span>{adminError}</span>
               </div>
             )}
 
             <form className="mt-6 space-y-4" onSubmit={handleAdminLoginSubmit}>
               <div>
-                <label htmlFor="admin_email_input" className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">
+                <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5">
                   Email Administrateur
                 </label>
                 <div className="relative">
-                  <Mail className="absolute left-3 top-3 h-4 w-4 text-slate-500" />
+                  <Mail className="absolute left-3.5 top-3 h-4 w-4 text-slate-500" />
                   <input
-                    id="admin_email_input"
                     type="email"
                     required
                     placeholder="admin@edumentor.ci"
-                    value={loginEmail}
-                    onChange={(e) => setLoginEmail(e.target.value)}
-                    className="w-full pl-9 pr-3 py-2 border border-slate-800 placeholder-slate-650 text-white rounded-xl bg-slate-900 focus:outline-none focus:ring-2 focus:ring-red-600 text-sm font-semibold"
+                    value={adminEmail}
+                    onChange={(e) => setAdminEmail(e.target.value)}
+                    className="w-full pl-10 pr-3.5 py-2.5 border border-slate-800 placeholder-slate-600 text-white rounded-xl bg-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 text-sm font-medium"
                   />
                 </div>
               </div>
 
               <div>
-                <label htmlFor="admin_password_input" className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">
-                  Mot de passe de sécurité
+                <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                  Mot de passe Administrateur
                 </label>
                 <div className="relative">
-                  <Lock className="absolute left-3 top-3 h-4 w-4 text-slate-500" />
+                  <Lock className="absolute left-3.5 top-3 h-4 w-4 text-slate-500" />
                   <input
-                    id="admin_password_input"
                     type="password"
                     required
                     placeholder="••••••••••••"
-                    value={loginPassword}
-                    onChange={(e) => setLoginPassword(e.target.value)}
-                    className="w-full pl-9 pr-3 py-2 border border-slate-800 placeholder-slate-600 text-white rounded-xl bg-slate-900 focus:outline-none focus:ring-2 focus:ring-red-600 text-sm"
+                    value={adminPassword}
+                    onChange={(e) => setAdminPassword(e.target.value)}
+                    className="w-full pl-10 pr-3.5 py-2.5 border border-slate-800 placeholder-slate-600 text-white rounded-xl bg-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 text-sm"
                   />
                 </div>
               </div>
 
               <button
                 type="submit"
-                className="w-full py-3 px-4 border border-transparent text-sm font-bold rounded-xl text-white bg-red-600 hover:bg-red-700 shadow-md shadow-red-500/10 transition-colors mt-6 flex items-center justify-center gap-2"
+                disabled={isLoading}
+                className="w-full py-3.5 px-4 text-sm font-bold rounded-2xl text-slate-950 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 shadow-lg shadow-amber-500/20 transition-all mt-6 flex items-center justify-center gap-2 font-heading uppercase tracking-wider disabled:opacity-50"
               >
-                <span>Connexion Administration</span>
-                <ArrowRight className="h-4 w-4" />
+                {isLoading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span>Vérification Admin...</span>
+                  </>
+                ) : (
+                  <span>Valider Accès Administrateur</span>
+                )}
               </button>
             </form>
-
-            <div className="text-center mt-6 pt-4 border-t border-slate-900">
-              <button
-                onClick={() => setMode("welcome")}
-                className="text-xs font-bold text-slate-500 hover:text-slate-400 transition-colors focus:outline-none"
-              >
-                Retour à l'accueil élève
-              </button>
-            </div>
           </motion.div>
         )}
+
       </AnimatePresence>
     </div>
   );

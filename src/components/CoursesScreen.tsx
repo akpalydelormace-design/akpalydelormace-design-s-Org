@@ -61,7 +61,9 @@ export const SUBJECT_METADATA: Record<Subject, { color: string; bg: string; bord
 export default function CoursesScreen({ lessons, completedLessonIds, onSelectLesson, userProfile }: CoursesScreenProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedSubject, setSelectedSubject] = useState<Subject | "Tous">("Tous");
-  const [selectedGrade, setSelectedGrade] = useState<Grade | "Tous">("Tous");
+
+  const userGrade = userProfile?.grade || "Terminale";
+  const userSerie = userProfile?.serie || "Série D";
 
   const subjectsList: Subject[] = [
     "Mathématiques",
@@ -73,30 +75,30 @@ export default function CoursesScreen({ lessons, completedLessonIds, onSelectLes
     "Histoire-Géographie"
   ];
 
-  const gradesList: Grade[] = ["2nde", "1ère", "Terminale"];
-
-  // Filter lessons based on search, subject, and grade
+  // Filter lessons based on user's grade and serie (strict profile isolation for students)
   const filteredLessons = useMemo(() => {
     return lessons.filter((lesson) => {
       const matchesSearch =
         lesson.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
         lesson.chapterTitle.toLowerCase().includes(searchQuery.toLowerCase());
       const matchesSubject = selectedSubject === "Tous" || lesson.subject === selectedSubject;
-      const matchesGrade = selectedGrade === "Tous" || lesson.grade === selectedGrade;
+      
+      // Strict profile matching: match grade and series
+      const matchesGrade = userProfile?.isAdmin ? true : lesson.grade === userGrade;
+      const matchesSerie = userProfile?.isAdmin ? true : (!lesson.serie || lesson.serie === "Toutes" || lesson.serie === userSerie);
+
       const isVisible = lesson.isPublished !== false || userProfile?.isAdmin;
-      return matchesSearch && matchesSubject && matchesGrade && isVisible;
+      return matchesSearch && matchesSubject && matchesGrade && matchesSerie && isVisible;
     });
-  }, [lessons, searchQuery, selectedSubject, selectedGrade, userProfile]);
+  }, [lessons, searchQuery, selectedSubject, userGrade, userSerie, userProfile]);
 
   // List of theoretical chapters matching filters to show the syllabus outline
   const outlineChapters = useMemo(() => {
-    const currentGrade = selectedGrade === "Tous" ? userProfile.grade : selectedGrade;
     const chaptersBySubject: Array<{ subject: Subject; chapterNo: number; title: string }> = [];
-
     const activeSubjects = selectedSubject === "Tous" ? subjectsList : [selectedSubject as Subject];
     
     activeSubjects.forEach((sub) => {
-      const chapters = CURRICULUM_OUTLINE[currentGrade]?.[sub] || [];
+      const chapters = CURRICULUM_OUTLINE[userGrade]?.[sub] || [];
       chapters.forEach((ch) => {
         chaptersBySubject.push({
           subject: sub,
@@ -107,27 +109,37 @@ export default function CoursesScreen({ lessons, completedLessonIds, onSelectLes
     });
 
     return chaptersBySubject;
-  }, [selectedGrade, selectedSubject, userProfile.grade]);
+  }, [selectedSubject, userGrade]);
 
   return (
     <div className="space-y-6 font-sans">
       {/* Header */}
-      <div>
-        <h1 className="text-3xl font-black font-heading text-slate-900 tracking-tight">Mes Cours</h1>
-        <p className="text-slate-500 font-medium mt-1">
-          Continue ton apprentissage conforme aux directives du Ministère de l'Éducation Nationale.
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+          <h1 className="text-3xl font-black font-heading text-slate-900 tracking-tight">
+            Mes Cours — <span className="text-blue-600">{userGrade} {userSerie}</span>
+          </h1>
+          <p className="text-slate-500 font-medium mt-1">
+            Programme officiel du Ministère de l'Éducation Nationale pour votre niveau.
+          </p>
+        </div>
+
+        {/* Profile Level Badge */}
+        <div className="inline-flex items-center gap-2 px-3.5 py-1.5 bg-blue-50 border border-blue-200 text-blue-700 rounded-full text-xs font-bold shrink-0 self-start sm:self-auto">
+          <BookOpen className="w-3.5 h-3.5 text-blue-600" />
+          <span>Profil : {userGrade} {userSerie}</span>
+        </div>
       </div>
 
       {/* FILTRES (en haut) */}
       <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm space-y-3">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {/* Recherche */}
           <div className="relative">
             <Search className="absolute left-3.5 top-3 h-4.5 w-4.5 text-slate-400" />
             <input
               type="text"
-              className="w-full pl-10 pr-4 py-2 border border-slate-200 text-slate-950 placeholder-slate-400 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent text-sm"
+              className="w-full pl-10 pr-4 py-2 border border-slate-200 text-slate-950 placeholder-slate-400 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent text-sm font-medium"
               placeholder="Chercher un cours ou un chapitre..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -136,9 +148,9 @@ export default function CoursesScreen({ lessons, completedLessonIds, onSelectLes
 
           {/* Matières */}
           <div className="flex items-center gap-2">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wide shrink-0 hidden sm:inline">Matière:</span>
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wide shrink-0 hidden sm:inline">Matière :</span>
             <select
-              className="w-full px-3 py-2 border border-slate-200 text-slate-950 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-600 text-sm bg-white"
+              className="w-full px-3 py-2 border border-slate-200 text-slate-950 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-600 text-sm bg-white font-medium"
               value={selectedSubject}
               onChange={(e) => setSelectedSubject(e.target.value as any)}
             >
@@ -146,23 +158,6 @@ export default function CoursesScreen({ lessons, completedLessonIds, onSelectLes
               {subjectsList.map((sub) => (
                 <option key={sub} value={sub}>
                   {sub}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Niveaux */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wide shrink-0 hidden sm:inline">Classe:</span>
-            <select
-              className="w-full px-3 py-2 border border-slate-200 text-slate-950 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-600 text-sm bg-white"
-              value={selectedGrade}
-              onChange={(e) => setSelectedGrade(e.target.value as any)}
-            >
-              <option value="Tous">Toutes les classes</option>
-              {gradesList.map((g) => (
-                <option key={g} value={g}>
-                  {g} (programme 2026-2027)
                 </option>
               ))}
             </select>
@@ -272,7 +267,7 @@ export default function CoursesScreen({ lessons, completedLessonIds, onSelectLes
         <div>
           <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100">
             <h3 className="font-bold text-slate-800 text-sm tracking-wider uppercase mb-3">
-              📋 Répertoire Général des Chapitres ({selectedGrade === "Tous" ? userProfile.grade : selectedGrade})
+              📋 Répertoire Général des Chapitres ({userGrade})
             </h3>
             <p className="text-xs text-slate-500 mb-4 leading-relaxed">
               Voici les chapitres officiels requis pour l'année scolaire 2026-2027. Tu peux demander à notre assistant IA de rédiger ou de générer des exercices sur n'importe lequel de ces thèmes !

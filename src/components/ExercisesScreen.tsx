@@ -176,14 +176,7 @@ export default function ExercisesScreen({ userProfile, onAddXp }: ExercisesScree
       }
     } catch (err: any) {
       console.error(err);
-      // Fallback evaluation locally
-      const mockScore = textAnswer.trim().length > 15 ? 9 : 5;
-      setEvaluationFeedback({
-        verdict: mockScore >= 8 ? "Correct" : "Partiellement Correct",
-        score: mockScore,
-        feedback: "[Correction Locale] Merci pour ta tentative ! Ton explication contient des éléments pertinents. " + currentQuestion.explanation
-      });
-      setScoresAccumulated(prev => [...prev, mockScore]);
+      setErrorMsg(err.message || "Erreur lors de l'évaluation par l'IA.");
     } finally {
       setIsSubmitting(false);
     }
@@ -202,7 +195,8 @@ export default function ExercisesScreen({ userProfile, onAddXp }: ExercisesScree
     } else {
       // Completed the session! Grant XP
       const totalScore = scoresAccumulated.reduce((a, b) => a + b, 0);
-      const averageScore = Math.round((totalScore / activeExerciseSet.questions.length) * 10) / 10;
+      const questionsCount = activeExerciseSet.questions?.length || 1;
+      const averageScore = Math.round((totalScore / questionsCount) * 10) / 10;
       
       // Add XP bonus to student
       onAddXp(50); 
@@ -338,7 +332,7 @@ export default function ExercisesScreen({ userProfile, onAddXp }: ExercisesScree
             <div className="bg-slate-50 p-4 border-2 border-slate-900 rounded-2xl max-w-sm mx-auto space-y-1">
               <p className="text-xs text-slate-400 uppercase font-black tracking-widest">Note Moyenne de l'atelier</p>
               <h4 className="text-3xl font-black text-blue-600 font-mono">
-                {Math.round((scoresAccumulated.reduce((a, b) => a + b, 0) / scoresAccumulated.length) * 10) / 10} / 10
+                {scoresAccumulated.length > 0 ? Math.round((scoresAccumulated.reduce((a, b) => a + b, 0) / scoresAccumulated.length) * 10) / 10 : 0} / 10
               </h4>
               <p className="text-[10px] font-bold text-slate-500">
                 Bonus d'assiduité accordé : <span className="text-emerald-600">+50 XP</span> !

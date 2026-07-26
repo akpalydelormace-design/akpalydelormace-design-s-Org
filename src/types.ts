@@ -20,6 +20,7 @@ export interface Lesson {
   id: string;
   subject: Subject;
   grade: Grade;
+  serie?: string;
   chapterNo: number;
   chapterTitle: string;
   title: string;
@@ -46,6 +47,7 @@ export interface Quiz {
   title: string;
   subject: Subject;
   grade: Grade;
+  serie?: string;
   chapterNo: number;
   chapterTitle: string;
   difficulty: Difficulty;

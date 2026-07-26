@@ -1,0 +1,132 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "User account and profile settings",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "firstName": { "type": "string" },
+        "lastName": { "type": "string" },
+        "email": { "type": "string" },
+        "grade": { "type": "string" },
+        "serie": { "type": "string" },
+        "schoolYear": { "type": "string" },
+        "country": { "type": "string" },
+        "schoolName": { "type": "string" },
+        "xp": { "type": "number" },
+        "streak": { "type": "number" },
+        "completedLessonsCount": { "type": "number" },
+        "completedQuizzesCount": { "type": "number" },
+        "isAdmin": { "type": "boolean" },
+        "isDisabled": { "type": "boolean" },
+        "isOnboarded": { "type": "boolean" },
+        "isEmailVerified": { "type": "boolean" }
+      },
+      "required": ["id", "firstName", "lastName", "email"]
+    },
+    "LearningHistory": {
+      "title": "Learning History",
+      "description": "Log of completed learning activities and quizzes",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "subject": { "type": "string" },
+        "grade": { "type": "string" },
+        "type": { "type": "string" },
+        "score": { "type": "number" },
+        "totalQuestions": { "type": "number" },
+        "date": { "type": "string" },
+        "durationMinutes": { "type": "number" }
+      },
+      "required": ["id", "userId", "title", "subject", "date"]
+    },
+    "Lesson": {
+      "title": "Lesson",
+      "description": "Educational course lesson content",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "subject": { "type": "string" },
+        "grade": { "type": "string" },
+        "chapterNo": { "type": "number" },
+        "durationMinutes": { "type": "number" },
+        "overview": { "type": "string" },
+        "isCustom": { "type": "boolean" }
+      },
+      "required": ["id", "title", "subject", "grade"]
+    },
+    "Quiz": {
+      "title": "Quiz",
+      "description": "Evaluation exercise or quiz",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "subject": { "type": "string" },
+        "grade": { "type": "string" },
+        "chapterNo": { "type": "number" },
+        "chapterTitle": { "type": "string" },
+        "difficulty": { "type": "string" },
+        "durationMinutes": { "type": "number" },
+        "isCustom": { "type": "boolean" }
+      },
+      "required": ["id", "title", "subject", "grade"]
+    },
+    "AdminLog": {
+      "title": "Admin Log",
+      "description": "System action log by administrators",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "adminEmail": { "type": "string" },
+        "adminName": { "type": "string" },
+        "action": { "type": "string" },
+        "target": { "type": "string" },
+        "date": { "type": "string" }
+      },
+      "required": ["id", "adminEmail", "action", "date"]
+    },
+    "Citation": {
+      "title": "Citation",
+      "description": "Daily motivational quote or citation",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "text": { "type": "string" },
+        "author": { "type": "string" },
+        "category": { "type": "string" }
+      },
+      "required": ["id", "text", "author"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Collection of registered user profiles"
+    },
+    "/users/{userId}/history/{historyId}": {
+      "schema": { "$ref": "#/entities/LearningHistory" },
+      "description": "Learning history logs for a specific user"
+    },
+    "/lessons/{lessonId}": {
+      "schema": { "$ref": "#/entities/Lesson" },
+      "description": "Collection of courses and lessons"
+    },
+    "/quizzes/{quizId}": {
+      "schema": { "$ref": "#/entities/Quiz" },
+      "description": "Collection of evaluation quizzes"
+    },
+    "/adminLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AdminLog" },
+      "description": "Audit trail of admin operations"
+    },
+    "/citations/{citationId}": {
+      "schema": { "$ref": "#/entities/Citation" },
+      "description": "Collection of daily educational quotes"
+    }
+  }
+}

@@ -61,7 +61,10 @@ export default function DashboardScreen({
   };
 
   const completedGoalsCount = weeklyGoals.filter(g => g.completed).length;
-  const progressPercent = Math.round((completedLessonIds.length / SAMPLE_LESSONS.length) * 100);
+  const totalLessonsCount = SAMPLE_LESSONS && SAMPLE_LESSONS.length > 0 ? SAMPLE_LESSONS.length : 0;
+  const progressPercent = totalLessonsCount > 0 
+    ? Math.min(100, Math.max(0, Math.round((completedLessonIds.length / totalLessonsCount) * 100))) 
+    : 0;
 
   // Recommended course cards
   const recommendedLessons = SAMPLE_LESSONS.filter(l => l.grade === userGrade);

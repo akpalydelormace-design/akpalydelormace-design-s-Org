@@ -33,6 +33,7 @@ import {
   Lesson,
   Subject,
   Grade,
+  Difficulty,
   Quiz
 } from "../types";
 import {
@@ -44,6 +45,10 @@ import {
   saveCitations,
   getAppSettings,
   saveAppSettings,
+  getStoredQuizzes,
+  saveQuizToFirestore,
+  deleteQuizFromFirestore,
+  subscribeToFirestore,
   AdminLog,
   Citation,
   AppSettings
@@ -118,20 +123,105 @@ export default function AdminPanelScreen({
   const [newQuoteAuthor, setNewQuoteAuthor] = useState("");
   const [newQuoteCat, setNewQuoteCat] = useState("Général");
 
+  // Quiz Management States
+  const [quizzesList, setQuizzesList] = useState<Quiz[]>(getStoredQuizzes());
+  const [quizTitle, setQuizTitle] = useState("");
+  const [quizSubject, setQuizSubject] = useState<Subject>("Mathématiques");
+  const [quizGrade, setQuizGrade] = useState<Grade>("Terminale");
+  const [quizChapTitle, setQuizChapTitle] = useState("");
+  const [quizDifficulty, setQuizDifficulty] = useState<Difficulty>("moyen");
+  const [isQuizAiGenerating, setIsQuizAiGenerating] = useState(false);
+
   // Status notifications inside admin
   const [adminMsg, setAdminMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
-  // Load everything
+  // Load everything and subscribe to real-time Firestore updates
   useEffect(() => {
-    setUsers(getStoredUsers());
-    setCitations(getStoredCitations());
-    setAdminLogs(getAdminLogs());
-    setAppSettings(getAppSettings());
+    const refresh = () => {
+      setUsers(getStoredUsers());
+      setCitations(getStoredCitations());
+      setAdminLogs(getAdminLogs());
+      setAppSettings(getAppSettings());
+      setQuizzesList(getStoredQuizzes());
+    };
+    refresh();
+    const unsubscribe = subscribeToFirestore(refresh);
+    return () => unsubscribe();
   }, []);
 
   const triggerMessage = (type: "success" | "error", text: string) => {
     setAdminMsg({ type, text });
     setTimeout(() => setAdminMsg(null), 4000);
+  };
+
+  const handleGenerateQuizAi = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!quizChapTitle) {
+      triggerMessage("error", "Veuillez indiquer le titre du chapitre.");
+      return;
+    }
+    setIsQuizAiGenerating(true);
+    try {
+      const response = await fetch("/api/exercise/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          subject: quizSubject,
+          grade: quizGrade,
+          chapterTitle: quizChapTitle,
+          difficulty: quizDifficulty
+        })
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || "Erreur lors de la génération d'exercice par l'IA.");
+      }
+
+      const data = await response.json();
+      const newQuiz: Quiz = {
+        id: "qz_" + Math.random().toString(36).substring(2, 9),
+        title: data.title || quizTitle || `Quiz IA : ${quizChapTitle}`,
+        subject: quizSubject,
+        grade: quizGrade,
+        chapterNo: 1,
+        chapterTitle: quizChapTitle,
+        difficulty: quizDifficulty,
+        questions: data.questions || [],
+        durationMinutes: 10,
+        recommended: true
+      };
+
+      await saveQuizToFirestore(newQuiz);
+      addAdminLog(
+        userProfile.email,
+        `${userProfile.firstName} ${userProfile.lastName}`,
+        "Génération de Quiz avec IA",
+        `${newQuiz.title} (${quizSubject})`
+      );
+      setQuizzesList(getStoredQuizzes());
+      triggerMessage("success", "Quiz/Exercice généré par l'IA et enregistré dans Firestore !");
+      setQuizChapTitle("");
+      setQuizTitle("");
+    } catch (err: any) {
+      triggerMessage("error", err.message || "Échec de génération du quiz.");
+    } finally {
+      setIsQuizAiGenerating(false);
+    }
+  };
+
+  const handleDeleteQuiz = async (id: string) => {
+    if (window.confirm("Supprimer ce quiz définitivement de Firestore ?")) {
+      await deleteQuizFromFirestore(id);
+      setQuizzesList(getStoredQuizzes());
+      addAdminLog(
+        userProfile.email,
+        `${userProfile.firstName} ${userProfile.lastName}`,
+        "Suppression de Quiz",
+        `ID: ${id}`
+      );
+      triggerMessage("success", "Quiz retiré de Firestore.");
+    }
   };
 
   // -----------------------------------------------------------------
@@ -214,8 +304,8 @@ export default function AdminPanelScreen({
         title: lessonTitle,
         isPublished: lessonIsPublished,
         pdfAvailable: pdfFileName ? true : editingLesson.pdfAvailable,
-        pdfUrl: pdfFileName || editingLesson.pdfUrl,
-        imageUrl: imageFileName || editingLesson.imageUrl,
+        ...(pdfFileName ? { pdfUrl: pdfFileName } : editingLesson.pdfUrl ? { pdfUrl: editingLesson.pdfUrl } : {}),
+        ...(imageFileName ? { imageUrl: imageFileName } : editingLesson.imageUrl ? { imageUrl: editingLesson.imageUrl } : {}),
         sections: [
           {
             title: "Introduction et Fondements",
@@ -253,8 +343,8 @@ export default function AdminPanelScreen({
         chapterTitle: lessonChapTitle,
         title: lessonTitle,
         pdfAvailable: !!pdfFileName,
-        pdfUrl: pdfFileName || undefined,
-        imageUrl: imageFileName || undefined,
+        ...(pdfFileName ? { pdfUrl: pdfFileName } : {}),
+        ...(imageFileName ? { imageUrl: imageFileName } : {}),
         isPublished: lessonIsPublished,
         readingTime: 12,
         sections: [
@@ -1176,14 +1266,133 @@ Rends le texte riche, complet, rédigé en français de manière académique.`;
               </div>
             )}
 
-            {/* Simulated UI notice for other content objects requested to prep later */}
+            {/* Quiz / Exercices / Défis Management View */}
             {contentSubTab !== "lessons" && contentSubTab !== "quotes" && (
-              <div className="p-8 text-center bg-white border-2 border-slate-900 rounded-3xl shadow-[4px_4px_0px_0px_#0f172a]">
-                <Sparkles className="h-10 w-10 text-blue-500 mx-auto mb-3" />
-                <h4 className="font-black text-base text-slate-900 uppercase">Configuration future active</h4>
-                <p className="text-slate-500 text-xs max-w-md mx-auto mt-2 leading-relaxed">
-                  L'interface pour la gestion des <b>{contentSubTab}</b> a été entièrement préparée et structurée pour l'administrateur. Les schémas de données locaux sont prêts à être raccordés à la base définitive.
-                </p>
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                {/* Generator Form */}
+                <div className="bg-white p-6 rounded-3xl border-2 border-slate-900 shadow-[4px_4px_0px_0px_#0f172a] space-y-4">
+                  <h3 className="font-black text-base text-slate-950 font-heading">
+                    ✨ Générer ou Créer un Evaluation ({contentSubTab})
+                  </h3>
+                  <form onSubmit={handleGenerateQuizAi} className="space-y-4">
+                    <div>
+                      <label htmlFor="qz_sub" className="block text-[10px] font-black text-slate-600 uppercase">Matière</label>
+                      <select
+                        id="qz_sub"
+                        className="w-full px-3 py-2 border-2 border-slate-900 text-slate-950 rounded-xl text-xs bg-white focus:outline-none"
+                        value={quizSubject}
+                        onChange={(e) => setQuizSubject(e.target.value as any)}
+                      >
+                        <option value="Mathématiques">Mathématiques</option>
+                        <option value="Français">Français</option>
+                        <option value="Anglais">Anglais</option>
+                        <option value="SVT">SVT</option>
+                        <option value="Physique-Chimie">Physique-Chimie</option>
+                        <option value="Philosophie">Philosophie</option>
+                        <option value="Histoire-Géographie">Histoire-Géographie</option>
+                      </select>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label htmlFor="qz_grd" className="block text-[10px] font-black text-slate-600 uppercase">Classe</label>
+                        <select
+                          id="qz_grd"
+                          className="w-full px-3 py-2 border-2 border-slate-900 text-slate-950 rounded-xl text-xs bg-white focus:outline-none"
+                          value={quizGrade}
+                          onChange={(e) => setQuizGrade(e.target.value as any)}
+                        >
+                          <option value="2nde">Seconde (2nde)</option>
+                          <option value="1ère">Première (1ère)</option>
+                          <option value="Terminale">Terminale (Tle)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label htmlFor="qz_diff" className="block text-[10px] font-black text-slate-600 uppercase">Difficulté</label>
+                        <select
+                          id="qz_diff"
+                          className="w-full px-3 py-2 border-2 border-slate-900 text-slate-950 rounded-xl text-xs bg-white focus:outline-none"
+                          value={quizDifficulty}
+                          onChange={(e) => setQuizDifficulty(e.target.value as any)}
+                        >
+                          <option value="facile">Facile</option>
+                          <option value="moyen">Moyen</option>
+                          <option value="difficile">Difficile</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label htmlFor="qz_chap" className="block text-[10px] font-black text-slate-600 uppercase">Titre du Chapitre / Thème</label>
+                      <input
+                        id="qz_chap"
+                        type="text"
+                        required
+                        className="w-full px-3 py-2 border-2 border-slate-900 text-slate-950 rounded-xl text-xs focus:outline-none"
+                        placeholder="Ex: Nombres complexes, Dissertation littéraire..."
+                        value={quizChapTitle}
+                        onChange={(e) => setQuizChapTitle(e.target.value)}
+                      />
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={isQuizAiGenerating}
+                      className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white text-xs font-black rounded-xl transition-all flex items-center justify-center gap-2"
+                    >
+                      {isQuizAiGenerating ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Génération IA Gemini en cours...
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="h-4 w-4" />
+                          Générer et Enregistrer dans Firestore
+                        </>
+                      )}
+                    </button>
+                  </form>
+                </div>
+
+                {/* Quizzes list in Firestore */}
+                <div className="lg:col-span-2 bg-white p-5 rounded-3xl border-2 border-slate-900 shadow-[4px_4px_0px_0px_#0f172a] space-y-4">
+                  <h3 className="font-black text-sm text-slate-800 uppercase tracking-wider">
+                    🎯 Banque d'Évaluations Firestore ({quizzesList.length})
+                  </h3>
+                  <div className="space-y-3 max-h-[520px] overflow-y-auto">
+                    {quizzesList.map((qz) => (
+                      <div key={qz.id} className="p-3.5 bg-slate-50 border-2 border-slate-200 rounded-2xl flex items-center justify-between gap-4 text-xs">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-[9px] font-black text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded uppercase border border-blue-100">
+                              {qz.subject}
+                            </span>
+                            <span className="text-[9px] font-black text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded uppercase">
+                              {qz.grade}
+                            </span>
+                            <span className="text-[9px] font-black text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded uppercase border border-purple-100">
+                              {qz.difficulty}
+                            </span>
+                            <span className="text-[9px] font-black text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded uppercase border border-emerald-100">
+                              {qz.questions?.length || 0} Questions
+                            </span>
+                          </div>
+                          <h4 className="font-black text-slate-900 mt-1.5 truncate">{qz.title}</h4>
+                          <p className="text-[10px] text-slate-500 font-semibold truncate mt-0.5">{qz.chapterTitle}</p>
+                        </div>
+
+                        <button
+                          onClick={() => handleDeleteQuiz(qz.id)}
+                          title="Supprimer ce quiz de Firestore"
+                          className="p-2 text-slate-400 hover:text-red-600 hover:bg-white rounded-xl border border-slate-200 transition-all shrink-0 cursor-pointer"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
             )}
 

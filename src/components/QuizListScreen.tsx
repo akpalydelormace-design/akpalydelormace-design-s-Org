@@ -35,7 +35,10 @@ export default function QuizListScreen({ quizzes, completedQuizzes, onStartQuiz,
     "Histoire-Géographie"
   ];
 
-  // Filter quizzes according to tabs, search, subject, difficulty
+  const userGrade = userProfile?.grade || "Terminale";
+  const userSerie = userProfile?.serie || "Série D";
+
+  // Filter quizzes according to tabs, search, subject, difficulty, grade, and series
   const filteredQuizzes = useMemo(() => {
     return quizzes.filter((quiz) => {
       const matchesSearch =
@@ -44,14 +47,17 @@ export default function QuizListScreen({ quizzes, completedQuizzes, onStartQuiz,
       const matchesSubject = selectedSubject === "Tous" || quiz.subject === selectedSubject;
       const matchesDiff = selectedDifficulty === "Tous" || quiz.difficulty === selectedDifficulty;
       
+      const matchesGrade = userProfile?.isAdmin ? true : (!quiz.grade || quiz.grade === userGrade);
+      const matchesSerie = userProfile?.isAdmin ? true : (!quiz.serie || quiz.serie === "Toutes" || quiz.serie === userSerie);
+
       const isQuizCompleted = completedQuizzes[quiz.id] !== undefined;
 
       if (activeTab === "todo" && isQuizCompleted) return false;
       if (activeTab === "completed" && !isQuizCompleted) return false;
 
-      return matchesSearch && matchesSubject && matchesDiff;
+      return matchesSearch && matchesSubject && matchesDiff && matchesGrade && matchesSerie;
     });
-  }, [quizzes, activeTab, searchQuery, selectedSubject, selectedDifficulty, completedQuizzes]);
+  }, [quizzes, activeTab, searchQuery, selectedSubject, selectedDifficulty, completedQuizzes, userGrade, userSerie, userProfile]);
 
   // Handle Generating Quiz via Gemini
   const handleGenerateAiQuiz = async (e: React.FormEvent) => {
@@ -106,11 +112,21 @@ export default function QuizListScreen({ quizzes, completedQuizzes, onStartQuiz,
   return (
     <div className="space-y-6 font-sans">
       {/* Header */}
-      <div>
-        <h1 className="text-3xl font-black font-heading text-slate-900 tracking-tight">Quiz & Exercices</h1>
-        <p className="text-slate-500 font-medium mt-1">
-          Teste tes connaissances et prépare ton examen national avec les quiz réguliers ou personnalisés par IA.
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+          <h1 className="text-3xl font-black font-heading text-slate-900 tracking-tight">
+            Quiz & Évaluations — <span className="text-blue-600">{userGrade} {userSerie}</span>
+          </h1>
+          <p className="text-slate-500 font-medium mt-1">
+            Testez vos connaissances et préparez vos examens selon votre niveau d'inscription.
+          </p>
+        </div>
+
+        {/* Profile Level Badge */}
+        <div className="inline-flex items-center gap-2 px-3.5 py-1.5 bg-blue-50 border border-blue-200 text-blue-700 rounded-full text-xs font-bold shrink-0 self-start sm:self-auto">
+          <Award className="w-3.5 h-3.5 text-blue-600" />
+          <span>Profil : {userGrade} {userSerie}</span>
+        </div>
       </div>
 
       {/* Tabs / Onglets */}
@@ -248,7 +264,7 @@ export default function QuizListScreen({ quizzes, completedQuizzes, onStartQuiz,
                           <div className="min-w-0">
                             <p className="text-[10px] font-bold text-slate-400 uppercase">Score obtenu</p>
                             <span className="text-sm font-black text-emerald-600 font-heading">
-                              {quizScore.score} / {quizScore.total} ({Math.round((quizScore.score / quizScore.total) * 100)}%)
+                              {quizScore.score} / {quizScore.total} ({quizScore.total > 0 ? Math.round((quizScore.score / quizScore.total) * 100) : 0}%)
                             </span>
                           </div>
                           <button

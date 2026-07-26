@@ -133,16 +133,26 @@ export default function CourseReaderScreen({
             </div>
 
             <div className="border-t border-slate-50 pt-4 px-1">
-              <div className="flex justify-between items-center text-[11px] font-bold text-slate-500 mb-1">
-                <span>Leçon assimilée</span>
-                <span>{markedRead ? "100%" : `${Math.round(((activeSectionIndex) / lesson.sections.length) * 100)}%`}</span>
-              </div>
-              <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-blue-600 rounded-full transition-all duration-300"
-                  style={{ width: markedRead ? "100%" : `${((activeSectionIndex) / lesson.sections.length) * 100}%` }}
-                ></div>
-              </div>
+              {(() => {
+                const totalSections = lesson.sections?.length || 0;
+                const sectionProgress = markedRead 
+                  ? 100 
+                  : (totalSections > 0 ? Math.min(100, Math.max(0, Math.round((activeSectionIndex / totalSections) * 100))) : 0);
+                return (
+                  <>
+                    <div className="flex justify-between items-center text-[11px] font-bold text-slate-500 mb-1">
+                      <span>Leçon assimilée</span>
+                      <span>{sectionProgress}%</span>
+                    </div>
+                    <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-blue-600 rounded-full transition-all duration-300"
+                        style={{ width: `${sectionProgress}%` }}
+                      ></div>
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           </div>
         </div>

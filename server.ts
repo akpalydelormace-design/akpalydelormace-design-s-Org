@@ -71,7 +71,7 @@ Rappelle-toi de l'environnement ivoirien (exemples locaux, épreuves de BAC / BE
     }));
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-3.6-flash",
       contents,
       config: {
         systemInstruction,
@@ -84,8 +84,7 @@ Rappelle-toi de l'environnement ivoirien (exemples locaux, épreuves de BAC / BE
   } catch (error: any) {
     console.error("Gemini Chat Error:", error);
     res.status(500).json({
-      error: error.message || "Erreur de communication avec l'assistant IA",
-      isDemoFallback: !process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === "MY_GEMINI_API_KEY"
+      error: error.message || "Erreur de communication avec l'assistant IA"
     });
   }
 });
@@ -108,7 +107,7 @@ Le quiz doit inclure :
 Propose des questions et des réponses adaptées au BAC ou examens ivoiriens, avec des explications détaillées (en français) pour chaque réponse.`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-3.6-flash",
       contents: prompt,
       config: {
         responseMimeType: "application/json",
@@ -145,34 +144,8 @@ Propose des questions et des réponses adaptées au BAC ou examens ivoiriens, av
     res.json(quizData);
   } catch (error: any) {
     console.error("Gemini Exercise Generator Error:", error);
-    // Graceful rich fallback in case of no API key or failure to avoid blocking user flow
-    res.status(200).json({
-      title: `Évaluation d'entraînement IA (${req.body.subject || "Général"})`,
-      questions: [
-        {
-          id: "fb_1",
-          type: "qcm",
-          questionText: `[Mode Démo] Quelle est la méthode principale d'étude pour un chapitre de ${req.body.subject || "cette matière"} ?`,
-          options: ["La mémorisation bête", "L'analyse critique et les exercices pratiques", "Ignorer les cours", "Regarder l'IA faire"],
-          correctAnswer: "L'analyse critique et les exercices pratiques",
-          explanation: "La réussite au BAC en Côte d'Ivoire repose sur la compréhension en profondeur des notions et la pratique assidue d'anciens sujets d'examen."
-        },
-        {
-          id: "fb_2",
-          type: "vrai_faux",
-          questionText: "[Mode Démo] Les annales de Côte d'Ivoire sont indispensables pour préparer l'examen.",
-          correctAnswer: "Vrai",
-          explanation: "S'entraîner sur des sujets réels permet de s'adapter aux consignes et aux exigences de notation des correcteurs."
-        },
-        {
-          id: "fb_3",
-          type: "texte_libre",
-          questionText: "[Mode Démo] Donnez un conseil essentiel que vous appliqueriez pour réussir vos examens cette année.",
-          correctAnswer: "La régularité",
-          explanation: "La clé de l'excellence académique est le travail continu et la révision quotidienne de chaque leçon."
-        }
-      ],
-      isFallback: true
+    res.status(500).json({
+      error: error.message || "Erreur lors de la génération du quiz par l'IA Gemini"
     });
   }
 });
@@ -198,7 +171,7 @@ Analyse si la réponse de l'étudiant est correcte (entièrement ou partiellemen
 - Un court commentaire explicatif personnalisé de 2-3 phrases maximum encouragant l'étudiant.`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-3.6-flash",
       contents: prompt,
       config: {
         responseMimeType: "application/json",
@@ -218,16 +191,26 @@ Analyse si la réponse de l'étudiant est correcte (entièrement ou partiellemen
     res.json(evaluationResult);
   } catch (error: any) {
     console.error("Gemini Evaluator Error:", error);
-    // Graceful fallback evaluation logic
-    const inputAns = studentAnswer || "";
-    const score = inputAns.trim().length > 10 ? 8 : inputAns.trim().length > 3 ? 5 : 2;
-    res.json({
-      verdict: score >= 8 ? "Correct" : score >= 5 ? "Partiellement Correct" : "Incorrect",
-      score,
-      feedback: "[Mode Démo] Votre réponse a été analysée localement. Félicitations pour votre tentative ! Continuez à enrichir vos explications.",
-      isFallback: true
+    res.status(500).json({
+      error: error.message || "Erreur lors de l'évaluation par l'IA Gemini"
     });
   }
+});
+
+// -----------------------------------------------------------------
+// PWA SPECIFIC HEADERS MIDDLEWARE
+// -----------------------------------------------------------------
+app.get("/manifest.json", (req, res, next) => {
+  res.setHeader("Content-Type", "application/manifest+json; charset=utf-8");
+  res.setHeader("Cache-Control", "public, max-age=0");
+  next();
+});
+
+app.get("/sw.js", (req, res, next) => {
+  res.setHeader("Content-Type", "application/javascript; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.setHeader("Service-Worker-Allowed", "/");
+  next();
 });
 
 // -----------------------------------------------------------------

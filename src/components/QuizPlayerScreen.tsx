@@ -205,7 +205,7 @@ export default function QuizPlayerScreen({ quiz, isDefiBac = false, onFinishQuiz
         <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
           <div
             className="h-full bg-blue-600 rounded-full transition-all duration-300"
-            style={{ width: `${((currentQuestionIndex + 1) / totalQuestions) * 100}%` }}
+            style={{ width: `${totalQuestions > 0 ? Math.min(100, Math.max(0, ((currentQuestionIndex + 1) / totalQuestions) * 100)) : 0}%` }}
           ></div>
         </div>
       </div>

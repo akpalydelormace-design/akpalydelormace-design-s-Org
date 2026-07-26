@@ -1,4 +1,5 @@
 import { Lesson, Subject, Grade } from "../types";
+import { TERMINALE_LESSONS } from "./terminale";
 
 export const CURRICULUM_OUTLINE: Record<Grade, Record<Subject, { chapterNo: number; title: string }[]>> = {
   "2nde": {
@@ -117,4 +118,4 @@ export const CURRICULUM_OUTLINE: Record<Grade, Record<Subject, { chapterNo: numb
   },
 };
 
-export const SAMPLE_LESSONS: Lesson[] = [];
+export const SAMPLE_LESSONS: Lesson[] = TERMINALE_LESSONS;

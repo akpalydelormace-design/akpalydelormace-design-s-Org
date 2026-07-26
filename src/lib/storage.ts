@@ -1,19 +1,50 @@
+import { 
+  collection, 
+  doc, 
+  getDoc, 
+  getDocs, 
+  setDoc, 
+  updateDoc, 
+  deleteDoc, 
+  onSnapshot,
+  query,
+  where,
+  orderBy
+} from "firebase/firestore";
+import { db, handleFirestoreError, OperationType, enableNetwork, disableNetwork, formatFirestoreErrorMessage } from "./firebase";
 import { UserProfile, LearningHistory, AppNotification, Lesson, Quiz, StudentGrade } from "../types";
 import { SAMPLE_LESSONS } from "../data/coursesData";
 import { SAMPLE_QUIZZES } from "../data/quizzesData";
-import { generateAllSyllabusLessons, generateAllSyllabusQuizzes } from "../data/syllabusGenerator";
 
-const PROFILE_KEY = "edumentor_user_profile";
-const HISTORY_KEY = "edumentor_learning_history";
-const COMPLETED_LESSONS_KEY = "edumentor_completed_lessons";
-const COMPLETED_QUIZZES_KEY = "edumentor_completed_quizzes";
-
-const USERS_KEY = "edumentor_users";
-const LOGS_KEY = "edumentor_admin_logs";
-const CITATIONS_KEY = "edumentor_citations";
-const SETTINGS_KEY = "edumentor_settings";
-const LESSONS_KEY = "edumentor_lessons";
-const QUIZZES_KEY = "edumentor_quizzes";
+/**
+ * Sanitizes any JS object or array before writing to Firestore.
+ * Removes properties whose values are `undefined` (or converts nested undefined to clean values)
+ * so that Firestore does not throw "Unsupported field value: undefined" errors.
+ */
+export function sanitizeForFirestore<T>(obj: T): T {
+  if (obj === undefined) {
+    return null as any;
+  }
+  if (obj === null || typeof obj !== 'object') {
+    return obj;
+  }
+  if (obj instanceof Date) {
+    return obj;
+  }
+  if (Array.isArray(obj)) {
+    return obj
+      .filter(item => item !== undefined)
+      .map(item => sanitizeForFirestore(item)) as any;
+  }
+  
+  const cleaned: Record<string, any> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) {
+      cleaned[key] = sanitizeForFirestore(value);
+    }
+  }
+  return cleaned as T;
+}
 
 export interface AdminLog {
   id: string;
@@ -39,28 +70,6 @@ export interface AppSettings {
   automaticBackups: boolean;
   notificationsEnabled: boolean;
 }
-
-const DEFAULT_PROFILE: UserProfile = {
-  id: "",
-  firstName: "",
-  lastName: "",
-  email: "",
-  password: "",
-  grade: "Terminale",
-  serie: "Série D",
-  schoolYear: "2026-2027",
-  country: "Côte d'Ivoire",
-  schoolName: "",
-  xp: 0,
-  streak: 0,
-  completedLessonsCount: 0,
-  completedQuizzesCount: 0,
-  isAdmin: false,
-  isDisabled: false,
-  isOnboarded: false,
-  isEmailVerified: false,
-  notifications: []
-};
 
 export interface Country {
   code: string;
@@ -139,8 +148,6 @@ const DEFAULT_USERS: UserProfile[] = [
   }
 ];
 
-const DEFAULT_CITATIONS: Citation[] = [];
-
 const DEFAULT_SETTINGS: AppSettings = {
   appName: "EduMentor CI",
   schoolYear: "2026-2027",
@@ -150,89 +157,322 @@ const DEFAULT_SETTINGS: AppSettings = {
   notificationsEnabled: true
 };
 
-const DEFAULT_LOGS: AdminLog[] = [];
+const DEFAULT_PROFILE: UserProfile = {
+  id: "u_default",
+  firstName: "Élève",
+  lastName: "EduMentor",
+  email: "eleve@edumentor.ci",
+  grade: "Terminale",
+  serie: "Série D",
+  schoolYear: "2026-2027",
+  country: "Côte d'Ivoire",
+  schoolName: "Lycée Classique d'Abidjan",
+  xp: 100,
+  streak: 1,
+  completedLessonsCount: 0,
+  completedQuizzesCount: 0,
+  isAdmin: false,
+  isDisabled: false,
+  isOnboarded: true,
+  isEmailVerified: true,
+  notifications: []
+};
 
-export function getStoredUsers(): UserProfile[] {
-  const data = localStorage.getItem(USERS_KEY);
-  if (!data) {
-    localStorage.setItem(USERS_KEY, JSON.stringify(DEFAULT_USERS));
-    return DEFAULT_USERS;
+// --- REACTIVE IN-MEMORY FIRESTORE CACHE ---
+let usersCache: UserProfile[] = DEFAULT_USERS;
+let historyCache: LearningHistory[] = [];
+let lessonsCache: Lesson[] = SAMPLE_LESSONS;
+let quizzesCache: Quiz[] = SAMPLE_QUIZZES;
+let adminLogsCache: AdminLog[] = [];
+let citationsCache: Citation[] = [];
+let settingsCache: AppSettings = DEFAULT_SETTINGS;
+let studentGradesCache: StudentGrade[] = [];
+let activeProfileCache: UserProfile | null = null;
+let activeSessionEmail: string = typeof window !== 'undefined' ? (localStorage.getItem("edumentor_active_email") || "") : "";
+
+// Subscriptions listener array
+type ListenerCallback = () => void;
+const listeners: Set<ListenerCallback> = new Set();
+
+export function subscribeToFirestore(callback: ListenerCallback): () => void {
+  listeners.add(callback);
+  return () => listeners.delete(callback);
+}
+
+function notifySubscribers() {
+  listeners.forEach(cb => {
+    try {
+      cb();
+    } catch (e) {
+      console.error("Firestore subscriber error:", e);
+    }
+  });
+}
+
+// Network and Sync status tracking
+let isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+let hasPendingWrites = false;
+let lastSyncTime: Date | null = new Date();
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', () => {
+    isOnline = true;
+    enableNetwork(db)
+      .then(() => console.info("[EduMentor Firestore Sync] Connexion réseau rétablie et réactivée."))
+      .catch((err) => console.warn("[EduMentor Firestore Sync] Warning lors de la réactivation réseau:", err));
+    notifySubscribers();
+  });
+  window.addEventListener('offline', () => {
+    isOnline = false;
+    console.info("[EduMentor Firestore Sync] Mode hors-ligne détecté. Cache local actif.");
+    notifySubscribers();
+  });
+}
+
+export function getSyncStatus() {
+  return { isOnline, hasPendingWrites, lastSyncTime };
+}
+
+// --- INITIALIZE FIRESTORE REALTIME LISTENERS & AUTO SYNC ---
+let listenersInitialized = false;
+
+function initFirestoreListeners() {
+  if (listenersInitialized) return;
+  listenersInitialized = true;
+
+  const updateMetadata = (metadata?: { hasPendingWrites: boolean; fromCache: boolean }) => {
+    if (metadata) {
+      hasPendingWrites = metadata.hasPendingWrites;
+      if (!metadata.fromCache) {
+        lastSyncTime = new Date();
+      }
+    }
+  };
+
+  // 1. Users Collection Listener
+  onSnapshot(collection(db, "users"), (snapshot) => {
+    updateMetadata(snapshot.metadata);
+    if (!snapshot.empty) {
+      const fetchedUsers: UserProfile[] = [];
+      snapshot.forEach(docSnap => {
+        fetchedUsers.push(docSnap.data() as UserProfile);
+      });
+      usersCache = fetchedUsers;
+      
+      // Update active profile if email matches
+      if (activeSessionEmail) {
+        const found = usersCache.find(u => u.email.toLowerCase() === activeSessionEmail.toLowerCase());
+        if (found) {
+          activeProfileCache = found;
+        }
+      }
+    } else {
+      // Seed default admin user to Firestore if collection empty
+      DEFAULT_USERS.forEach(u => saveUserToFirestore(u));
+    }
+    notifySubscribers();
+  }, (err) => {
+    console.warn("[Firestore Snapshot Notice - Users]:", formatFirestoreErrorMessage(err));
+  });
+
+  // 2. Lessons Listener
+  onSnapshot(collection(db, "lessons"), (snapshot) => {
+    updateMetadata(snapshot.metadata);
+    if (!snapshot.empty) {
+      const fetchedLessons: Lesson[] = [];
+      snapshot.forEach(docSnap => {
+        fetchedLessons.push(docSnap.data() as Lesson);
+      });
+      lessonsCache = fetchedLessons;
+
+      // Auto-sync missing Terminale lessons to Firestore
+      SAMPLE_LESSONS.forEach(l => {
+        if (!fetchedLessons.some(existing => existing.id === l.id)) {
+          setDoc(doc(db, "lessons", l.id), sanitizeForFirestore(l), { merge: true }).catch(console.error);
+        }
+      });
+    } else {
+      SAMPLE_LESSONS.forEach(l => {
+        setDoc(doc(db, "lessons", l.id), sanitizeForFirestore(l), { merge: true }).catch(console.error);
+      });
+    }
+    notifySubscribers();
+  }, (err) => {
+    console.warn("[Firestore Snapshot Notice - Lessons]:", formatFirestoreErrorMessage(err));
+  });
+
+  // 3. Quizzes Listener
+  onSnapshot(collection(db, "quizzes"), (snapshot) => {
+    updateMetadata(snapshot.metadata);
+    if (!snapshot.empty) {
+      const fetchedQuizzes: Quiz[] = [];
+      snapshot.forEach(docSnap => {
+        fetchedQuizzes.push(docSnap.data() as Quiz);
+      });
+      quizzesCache = fetchedQuizzes;
+
+      // Auto-sync missing Terminale quizzes to Firestore
+      SAMPLE_QUIZZES.forEach(q => {
+        if (!fetchedQuizzes.some(existing => existing.id === q.id)) {
+          setDoc(doc(db, "quizzes", q.id), sanitizeForFirestore(q), { merge: true }).catch(console.error);
+        }
+      });
+    } else {
+      SAMPLE_QUIZZES.forEach(q => {
+        setDoc(doc(db, "quizzes", q.id), sanitizeForFirestore(q), { merge: true }).catch(console.error);
+      });
+    }
+    notifySubscribers();
+  }, (err) => {
+    console.warn("[Firestore Snapshot Notice - Quizzes]:", formatFirestoreErrorMessage(err));
+  });
+
+  // 4. Admin Logs Listener
+  onSnapshot(collection(db, "adminLogs"), (snapshot) => {
+    updateMetadata(snapshot.metadata);
+    if (!snapshot.empty) {
+      const fetchedLogs: AdminLog[] = [];
+      snapshot.forEach(docSnap => {
+        fetchedLogs.push(docSnap.data() as AdminLog);
+      });
+      adminLogsCache = fetchedLogs.sort((a, b) => b.id.localeCompare(a.id));
+    }
+    notifySubscribers();
+  }, (err) => {
+    console.warn("[Firestore Snapshot Notice - AdminLogs]:", formatFirestoreErrorMessage(err));
+  });
+
+  // 5. Citations Listener
+  onSnapshot(collection(db, "citations"), (snapshot) => {
+    updateMetadata(snapshot.metadata);
+    if (!snapshot.empty) {
+      const fetchedCitations: Citation[] = [];
+      snapshot.forEach(docSnap => {
+        fetchedCitations.push(docSnap.data() as Citation);
+      });
+      citationsCache = fetchedCitations;
+    }
+    notifySubscribers();
+  }, (err) => {
+    console.warn("[Firestore Snapshot Notice - Citations]:", formatFirestoreErrorMessage(err));
+  });
+
+  // 6. Settings Listener
+  onSnapshot(doc(db, "settings", "app_settings"), (docSnap) => {
+    updateMetadata(docSnap.metadata);
+    if (docSnap.exists()) {
+      settingsCache = docSnap.data() as AppSettings;
+    } else {
+      setDoc(doc(db, "settings", "app_settings"), sanitizeForFirestore(DEFAULT_SETTINGS), { merge: true }).catch(console.error);
+    }
+    notifySubscribers();
+  }, (err) => {
+    console.warn("[Firestore Snapshot Notice - Settings]:", formatFirestoreErrorMessage(err));
+  });
+
+  // 7. Student Grades Listener
+  onSnapshot(collection(db, "studentGrades"), (snapshot) => {
+    updateMetadata(snapshot.metadata);
+    if (!snapshot.empty) {
+      const fetchedGrades: StudentGrade[] = [];
+      snapshot.forEach(docSnap => {
+        fetchedGrades.push(docSnap.data() as StudentGrade);
+      });
+      studentGradesCache = fetchedGrades;
+    }
+    notifySubscribers();
+  }, (err) => {
+    console.warn("[Firestore Snapshot Notice - StudentGrades]:", formatFirestoreErrorMessage(err));
+  });
+
+  // 8. History Listener
+  onSnapshot(collection(db, "history"), (snapshot) => {
+    updateMetadata(snapshot.metadata);
+    if (!snapshot.empty) {
+      const fetchedHistory: LearningHistory[] = [];
+      snapshot.forEach(docSnap => {
+        fetchedHistory.push(docSnap.data() as LearningHistory);
+      });
+      historyCache = fetchedHistory;
+    }
+    notifySubscribers();
+  }, (err) => {
+    console.warn("[Firestore Snapshot Notice - History]:", formatFirestoreErrorMessage(err));
+  });
+}
+
+// Start Firestore real-time background listeners
+initFirestoreListeners();
+
+// --- SESSION STORAGE HELPERS ---
+export function setActiveSessionEmail(email: string) {
+  activeSessionEmail = email;
+  if (typeof window !== 'undefined') {
+    if (email) {
+      localStorage.setItem("edumentor_active_email", email);
+    } else {
+      localStorage.removeItem("edumentor_active_email");
+    }
   }
-  return JSON.parse(data);
+
+  if (email) {
+    const found = usersCache.find(u => u.email.toLowerCase() === email.toLowerCase());
+    if (found) {
+      activeProfileCache = found;
+    } else {
+      activeProfileCache = getProfileByEmail(email);
+    }
+  } else {
+    activeProfileCache = null;
+  }
+}
+
+export function getActiveSessionEmail(): string {
+  return activeSessionEmail;
+}
+
+// --- USER MANAGEMENT FUNCTIONS (PURE FIRESTORE) ---
+export function getStoredUsers(): UserProfile[] {
+  return usersCache;
+}
+
+export function saveUserToFirestore(user: UserProfile): Promise<void> {
+  const docId = user.id || user.email.replace(/[@.]/g, '_');
+  const path = `users/${docId}`;
+  
+  // Security enforcement
+  if (user.email.toLowerCase() === "louamoisegognin@gmail.com") {
+    user.isAdmin = true;
+  } else if (user.isAdmin === undefined) {
+    user.isAdmin = false;
+  }
+
+  // Update in-memory cache
+  const idx = usersCache.findIndex(u => u.email.toLowerCase() === user.email.toLowerCase());
+  if (idx !== -1) {
+    usersCache[idx] = user;
+  } else {
+    usersCache.push(user);
+  }
+
+  return setDoc(doc(db, "users", docId), sanitizeForFirestore(user), { merge: true })
+    .catch((err) => { handleFirestoreError(err, OperationType.WRITE, path); });
 }
 
 export function saveUsers(users: UserProfile[]): void {
-  localStorage.setItem(USERS_KEY, JSON.stringify(users));
-}
-
-export function getAdminLogs(): AdminLog[] {
-  const data = localStorage.getItem(LOGS_KEY);
-  if (!data) {
-    localStorage.setItem(LOGS_KEY, JSON.stringify(DEFAULT_LOGS));
-    return DEFAULT_LOGS;
-  }
-  return JSON.parse(data);
-}
-
-export function saveAdminLogs(logs: AdminLog[]): void {
-  localStorage.setItem(LOGS_KEY, JSON.stringify(logs));
-}
-
-export function addAdminLog(adminEmail: string, adminName: string, action: string, target: string): void {
-  const logs = getAdminLogs();
-  const newLog: AdminLog = {
-    id: "log_" + Math.random().toString(36).substring(2, 9),
-    adminEmail,
-    adminName,
-    action,
-    target,
-    date: new Date().toLocaleDateString("fr-FR", {
-      day: "numeric",
-      month: "short",
-      year: "numeric"
-    }) + ", " + new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })
-  };
-  logs.unshift(newLog);
-  saveAdminLogs(logs);
-}
-
-export function getStoredCitations(): Citation[] {
-  const data = localStorage.getItem(CITATIONS_KEY);
-  if (!data) {
-    localStorage.setItem(CITATIONS_KEY, JSON.stringify(DEFAULT_CITATIONS));
-    return DEFAULT_CITATIONS;
-  }
-  return JSON.parse(data);
-}
-
-export function saveCitations(citations: Citation[]): void {
-  localStorage.setItem(CITATIONS_KEY, JSON.stringify(citations));
-}
-
-export function getAppSettings(): AppSettings {
-  const data = localStorage.getItem(SETTINGS_KEY);
-  if (!data) {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(DEFAULT_SETTINGS));
-    return DEFAULT_SETTINGS;
-  }
-  return JSON.parse(data);
-}
-
-export function saveAppSettings(settings: AppSettings): void {
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  usersCache = users;
+  users.forEach(u => saveUserToFirestore(u));
 }
 
 export function getProfileByEmail(email: string): UserProfile {
-  const users = getStoredUsers();
-  const found = users.find(u => u.email.toLowerCase() === email.toLowerCase());
+  const found = usersCache.find(u => u.email.toLowerCase() === email.toLowerCase());
   if (found) {
     if (email.toLowerCase() === "louamoisegognin@gmail.com") {
       found.isAdmin = true;
-    } else {
-      found.isAdmin = false;
     }
     return found;
   }
+
   const isTargetAdmin = email.toLowerCase() === "louamoisegognin@gmail.com";
   const newProfile: UserProfile = {
     id: "u_" + Math.random().toString(36).substring(2, 9),
@@ -248,167 +488,203 @@ export function getProfileByEmail(email: string): UserProfile {
     completedLessonsCount: 0,
     completedQuizzesCount: 0,
     isAdmin: isTargetAdmin,
+    isDisabled: false,
     isOnboarded: false,
     isEmailVerified: false,
     notifications: []
   };
-  users.push(newProfile);
-  saveUsers(users);
+
+  saveUserToFirestore(newProfile);
   return newProfile;
 }
 
-export function getStoredProfile(): UserProfile {
-  const data = localStorage.getItem(PROFILE_KEY);
-  if (!data) {
-    const activeEmail = localStorage.getItem("edumentor_logged_in_email");
-    if (activeEmail) {
-      const profile = getProfileByEmail(activeEmail);
-      localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
-      return profile;
-    }
-    localStorage.setItem(PROFILE_KEY, JSON.stringify(DEFAULT_PROFILE));
-    return DEFAULT_PROFILE;
+export function getStoredProfile(): UserProfile | null {
+  if (activeSessionEmail) {
+    const found = usersCache.find(u => u.email.toLowerCase() === activeSessionEmail.toLowerCase());
+    if (found) return found;
   }
-  return JSON.parse(data);
+  return activeProfileCache;
 }
 
 export function saveProfile(profile: UserProfile): void {
-  // Security policy enforcement
   if (profile.email.toLowerCase() === "louamoisegognin@gmail.com") {
     profile.isAdmin = true;
-  } else {
-    profile.isAdmin = false;
   }
-  
-  localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
-  const users = getStoredUsers();
-  const idx = users.findIndex(u => u.email.toLowerCase() === profile.email.toLowerCase());
-  if (idx !== -1) {
-    users[idx] = { ...users[idx], ...profile };
-    saveUsers(users);
-  } else {
-    users.push(profile);
-    saveUsers(users);
-  }
+  activeProfileCache = profile;
+  activeSessionEmail = profile.email;
+  saveUserToFirestore(profile);
 }
 
-const DEFAULT_HISTORY: LearningHistory[] = [];
+// --- ADMIN LOGS (PURE FIRESTORE) ---
+export function getAdminLogs(): AdminLog[] {
+  return adminLogsCache;
+}
 
+export function saveAdminLogs(logs: AdminLog[]): void {
+  adminLogsCache = logs;
+  logs.forEach(log => {
+    setDoc(doc(db, "adminLogs", log.id), sanitizeForFirestore(log), { merge: true }).catch(console.error);
+  });
+}
+
+export function addAdminLog(adminEmail: string, adminName: string, action: string, target: string): void {
+  const newLog: AdminLog = {
+    id: "log_" + Math.random().toString(36).substring(2, 9),
+    adminEmail,
+    adminName,
+    action,
+    target,
+    date: new Date().toLocaleDateString("fr-FR", {
+      day: "numeric",
+      month: "short",
+      year: "numeric"
+    }) + ", " + new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })
+  };
+  adminLogsCache.unshift(newLog);
+  setDoc(doc(db, "adminLogs", newLog.id), sanitizeForFirestore(newLog), { merge: true }).catch(console.error);
+}
+
+// --- CITATIONS (PURE FIRESTORE) ---
+export function getStoredCitations(): Citation[] {
+  return citationsCache;
+}
+
+export function saveCitations(citations: Citation[]): void {
+  citationsCache = citations;
+  citations.forEach(c => {
+    setDoc(doc(db, "citations", c.id), sanitizeForFirestore(c), { merge: true }).catch(console.error);
+  });
+}
+
+export function addCitationToFirestore(citation: Citation): Promise<void> {
+  citationsCache.unshift(citation);
+  return setDoc(doc(db, "citations", citation.id), sanitizeForFirestore(citation), { merge: true }).catch(console.error);
+}
+
+// --- APP SETTINGS (PURE FIRESTORE) ---
+export function getAppSettings(): AppSettings {
+  return settingsCache;
+}
+
+export function saveAppSettings(settings: AppSettings): void {
+  settingsCache = settings;
+  setDoc(doc(db, "settings", "app_settings"), sanitizeForFirestore(settings), { merge: true }).catch(console.error);
+}
+
+// --- LEARNING HISTORY (PURE FIRESTORE) ---
 export function getStoredHistory(): LearningHistory[] {
-  const data = localStorage.getItem(HISTORY_KEY);
-  if (!data) {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(DEFAULT_HISTORY));
-    return DEFAULT_HISTORY;
-  }
-  return JSON.parse(data);
+  return historyCache;
 }
 
 export function saveHistory(history: LearningHistory[]): void {
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+  historyCache = history;
+  history.forEach(item => {
+    setDoc(doc(db, "history", item.id), sanitizeForFirestore(item), { merge: true }).catch(console.error);
+  });
 }
 
+// --- LESSONS & QUIZZES (PURE FIRESTORE) ---
 export function getStoredLessons(): Lesson[] {
-  const data = localStorage.getItem(LESSONS_KEY);
-  if (!data) {
-    localStorage.setItem(LESSONS_KEY, JSON.stringify([]));
-    return [];
-  }
-  return JSON.parse(data);
+  return lessonsCache;
 }
 
 export function saveLessons(lessons: Lesson[]): void {
-  localStorage.setItem(LESSONS_KEY, JSON.stringify(lessons));
+  lessonsCache = lessons;
+  lessons.forEach(l => {
+    setDoc(doc(db, "lessons", l.id), sanitizeForFirestore(l), { merge: true }).catch(console.error);
+  });
 }
 
 export function getStoredQuizzes(): Quiz[] {
-  const data = localStorage.getItem(QUIZZES_KEY);
-  if (!data) {
-    localStorage.setItem(QUIZZES_KEY, JSON.stringify([]));
-    return [];
-  }
-  return JSON.parse(data);
+  return quizzesCache;
 }
 
 export function saveQuizzes(quizzes: Quiz[]): void {
-  localStorage.setItem(QUIZZES_KEY, JSON.stringify(quizzes));
+  quizzesCache = quizzes;
+  quizzes.forEach(q => {
+    setDoc(doc(db, "quizzes", q.id), sanitizeForFirestore(q), { merge: true }).catch(console.error);
+  });
 }
 
+// --- COMPLETED PROGRESS & ACHIEVEMENTS (PURE FIRESTORE) ---
 export function getCompletedLessons(): string[] {
-  const data = localStorage.getItem(COMPLETED_LESSONS_KEY);
-  return data ? JSON.parse(data) : [];
+  const profile = getStoredProfile();
+  return (profile as any).completedLessonIds || [];
 }
 
 export function markLessonCompleted(lessonId: string): void {
-  const completed = getCompletedLessons();
-  if (!completed.includes(lessonId)) {
-    completed.push(lessonId);
-    localStorage.setItem(COMPLETED_LESSONS_KEY, JSON.stringify(completed));
+  const profile = getStoredProfile();
+  const currentCompleted: string[] = (profile as any).completedLessonIds || [];
+
+  if (!currentCompleted.includes(lessonId)) {
+    const updatedCompleted = [...currentCompleted, lessonId];
+    (profile as any).completedLessonIds = updatedCompleted;
 
     // Grant XP and increment counter
-    const profile = getStoredProfile();
     profile.xp += 50;
-    profile.completedLessonsCount = completed.length;
-    saveProfile(profile);
+    profile.completedLessonsCount = updatedCompleted.length;
 
     // Add notification
-    const lesson = getStoredLessons().find(l => l.id === lessonId);
+    const lesson = lessonsCache.find(l => l.id === lessonId);
     const newNotif: AppNotification = {
-      id: Math.random().toString(),
+      id: "n_" + Math.random().toString(36).substring(2, 9),
       title: "🎓 Cours terminé !",
       message: `Bravo ! Tu as validé le cours : "${lesson?.title || 'Cours'}" et obtenu +50 XP.`,
       date: "À l'instant",
       read: false
     };
-    profile.notifications = [newNotif, ...profile.notifications];
+    profile.notifications = [newNotif, ...(profile.notifications || [])];
     saveProfile(profile);
 
-    // Add to history
-    const history = getStoredHistory();
-    history.unshift({
-      id: Math.random().toString(),
+    // Add history log in Firestore
+    const newHistoryItem: LearningHistory = {
+      id: "h_" + Math.random().toString(36).substring(2, 9),
       type: "cours",
       itemTitle: lesson?.title || "Cours",
       subject: lesson?.subject || "Mathématiques",
       date: new Date().toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" }),
       xpEarned: 50
-    });
-    saveHistory(history);
+    };
+    historyCache.unshift(newHistoryItem);
+    setDoc(doc(db, "history", newHistoryItem.id), sanitizeForFirestore(newHistoryItem), { merge: true }).catch(console.error);
   }
 }
 
 export function getCompletedQuizzes(): Record<string, { score: number; total: number }> {
-  const data = localStorage.getItem(COMPLETED_QUIZZES_KEY);
-  return data ? JSON.parse(data) : {};
+  const profile = getStoredProfile();
+  return (profile as any).completedQuizzesMap || {};
 }
 
 export function markQuizCompleted(quizId: string, score: number, total: number, quizTitle: string, subject: string, isDefiBac = false): void {
-  const completed = getCompletedQuizzes();
-  completed[quizId] = { score, total };
-  localStorage.setItem(COMPLETED_QUIZZES_KEY, JSON.stringify(completed));
+  const profile = getStoredProfile();
+  const completedMap: Record<string, { score: number; total: number }> = (profile as any).completedQuizzesMap || {};
+
+  completedMap[quizId] = { score, total };
+  (profile as any).completedQuizzesMap = completedMap;
 
   // Grant XP and increment counter
-  const profile = getStoredProfile();
-  const xpEarned = isDefiBac ? 150 : Math.round((score / total) * 100);
+  const safeTotal = total > 0 ? total : 1;
+  const percentage = Math.round((score / safeTotal) * 100);
+  const xpEarned = isDefiBac ? 150 : percentage;
   profile.xp += xpEarned;
-  profile.completedQuizzesCount = Object.keys(completed).length;
-  
+  profile.completedQuizzesCount = Object.keys(completedMap).length;
+
   // Add notification
   const newNotif: AppNotification = {
-    id: Math.random().toString(),
+    id: "n_" + Math.random().toString(36).substring(2, 9),
     title: isDefiBac ? "🎯 Défi Bac IA Terminé !" : "📝 Quiz validé !",
     message: isDefiBac 
-      ? `Félicitations pour ton Défi Bac IA ! Score : ${score}/${total} (${Math.round((score/total)*100)}%). Tu as gagné +150 XP !`
+      ? `Félicitations pour ton Défi Bac IA ! Score : ${score}/${total} (${percentage}%). Tu as gagné +150 XP !`
       : `Tu as terminé le quiz "${quizTitle}" avec un score de ${score}/${total}. +${xpEarned} XP remportés !`,
     date: "À l'instant",
     read: false
   };
-  profile.notifications = [newNotif, ...profile.notifications];
+  profile.notifications = [newNotif, ...(profile.notifications || [])];
   saveProfile(profile);
 
-  // Add to history
-  const history = getStoredHistory();
-  history.unshift({
-    id: Math.random().toString(),
+  // Add history log in Firestore
+  const newHistoryItem: LearningHistory = {
+    id: "h_" + Math.random().toString(36).substring(2, 9),
     type: isDefiBac ? "defi_bac" : "quiz",
     itemTitle: quizTitle,
     subject: subject as any,
@@ -416,32 +692,66 @@ export function markQuizCompleted(quizId: string, score: number, total: number, 
     totalQuestions: total,
     date: new Date().toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" }),
     xpEarned
-  });
-  saveHistory(history);
+  };
+  historyCache.unshift(newHistoryItem);
+  setDoc(doc(db, "history", newHistoryItem.id), sanitizeForFirestore(newHistoryItem), { merge: true }).catch(console.error);
 }
 
+// --- STUDENT GRADES (PURE FIRESTORE) ---
 export function getStoredStudentGrades(): StudentGrade[] {
-  const data = localStorage.getItem("edumentor_student_grades");
-  return data ? JSON.parse(data) : [];
+  return studentGradesCache;
 }
 
 export function saveStudentGrades(grades: StudentGrade[]): void {
-  localStorage.setItem("edumentor_student_grades", JSON.stringify(grades));
+  studentGradesCache = grades;
+  grades.forEach(g => {
+    setDoc(doc(db, "studentGrades", g.id), sanitizeForFirestore(g), { merge: true }).catch(console.error);
+  });
 }
 
 export function addStudentGrade(grade: Omit<StudentGrade, "id">): StudentGrade {
-  const grades = getStoredStudentGrades();
   const newGrade: StudentGrade = {
     ...grade,
     id: "g_" + Math.random().toString(36).substring(2, 9),
   };
-  grades.unshift(newGrade);
-  saveStudentGrades(grades);
+  studentGradesCache.unshift(newGrade);
+  setDoc(doc(db, "studentGrades", newGrade.id), sanitizeForFirestore(newGrade), { merge: true }).catch(console.error);
   return newGrade;
 }
 
 export function deleteStudentGrade(id: string): void {
-  const grades = getStoredStudentGrades();
-  const filtered = grades.filter(g => g.id !== id);
-  saveStudentGrades(filtered);
+  studentGradesCache = studentGradesCache.filter(g => g.id !== id);
+  deleteDoc(doc(db, "studentGrades", id)).catch(console.error);
+}
+
+// --- BOOKMARKS & FAVORITES (PURE FIRESTORE) ---
+export function getBookmarkedLessons(): string[] {
+  const profile = getStoredProfile();
+  return (profile as any).bookmarkedLessonIds || [];
+}
+
+export function toggleBookmarkLesson(lessonId: string): void {
+  const profile = getStoredProfile();
+  const currentBookmarks: string[] = (profile as any).bookmarkedLessonIds || [];
+  const exists = currentBookmarks.includes(lessonId);
+  const updated = exists
+    ? currentBookmarks.filter(id => id !== lessonId)
+    : [...currentBookmarks, lessonId];
+  (profile as any).bookmarkedLessonIds = updated;
+  saveProfile(profile);
+}
+
+export function saveQuizToFirestore(quiz: Quiz): Promise<void> {
+  const idx = quizzesCache.findIndex(q => q.id === quiz.id);
+  if (idx !== -1) {
+    quizzesCache[idx] = quiz;
+  } else {
+    quizzesCache.unshift(quiz);
+  }
+  return setDoc(doc(db, "quizzes", quiz.id), sanitizeForFirestore(quiz), { merge: true }).catch(console.error);
+}
+
+export function deleteQuizFromFirestore(id: string): Promise<void> {
+  quizzesCache = quizzesCache.filter(q => q.id !== id);
+  return deleteDoc(doc(db, "quizzes", id)).catch(console.error);
 }

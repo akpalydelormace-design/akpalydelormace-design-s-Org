@@ -79,23 +79,7 @@ Je connais parfaitement le programme officiel ivoirien de la classe de **${userP
       setMessages((prev) => [...prev, assistantMsg]);
     } catch (err: any) {
       console.error(err);
-      setErrorMsg(err.message || "Une erreur de réseau s'est produite.");
-      
-      // Educational demo mode fallback message to avoid blocking student revisions
-      const fallbackMsg: ChatMessage = {
-        id: "fb_" + Math.random().toString(),
-        sender: "assistant",
-        text: `**[Mode Démo]** Désolé, je rencontre une difficulté de connexion avec mes serveurs de calcul IA. 
-
-Voici toutefois un conseil de révision pour le chapitre correspondant :
-*   Assure-toi d'étudier la fiche de cours complète dans l'onglet **Mes Cours**.
-*   Fais des séances de révision espacées de 25 minutes (méthode Pomodoro).
-*   Entraîne-toi sur l'onglet **Quiz & Exercices** qui comporte des quiz interactifs déjà prêts à l'emploi !
-
-Recommence ta saisie ou écris à nouveau s'il s'agissait d'une coupure réseau temporaire.`,
-        timestamp: new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })
-      };
-      setMessages((prev) => [...prev, fallbackMsg]);
+      setErrorMsg(err.message || "Une erreur de communication avec le serveur IA s'est produite.");
     } finally {
       setIsSending(false);
     }
@@ -205,7 +189,7 @@ Recommence ta saisie ou écris à nouveau s'il s'agissait d'une coupure réseau 
         {errorMsg && (
           <div className="bg-red-50 border border-red-100 text-red-700 text-xs font-bold p-3 rounded-xl flex items-center gap-2">
             <AlertCircle className="h-4.5 w-4.5 text-red-500 shrink-0" />
-            <span>Erreur : {errorMsg} (Utilisation du mode secours démo automatique)</span>
+            <span>Erreur : {errorMsg}</span>
           </div>
         )}
 

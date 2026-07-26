@@ -545,7 +545,7 @@ export default function BulletinScreen({ userProfile }: BulletinScreenProps) {
                                     ? "bg-emerald-600" 
                                     : "bg-red-500"
                             }`}
-                            style={{ width: `${(score / 20) * 100}%` }}
+                            style={{ width: `${Math.min(100, Math.max(0, (((score || 0) / 20) * 100)))}%` }}
                           ></div>
                         )}
                         <div className="absolute top-0 bottom-0 left-[50%] border-r border-dashed border-slate-300"></div> {/* 10/20 line marker */}

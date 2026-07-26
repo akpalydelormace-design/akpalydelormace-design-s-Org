@@ -40,7 +40,11 @@ import {
   getStoredLessons,
   getStoredQuizzes,
   saveLessons,
-  saveQuizzes
+  saveQuizzes,
+  setActiveSessionEmail,
+  getActiveSessionEmail,
+  subscribeToFirestore,
+  getSyncStatus
 } from "./lib/storage";
 
 // Screens
@@ -57,8 +61,15 @@ import ProfileSettingsScreen from "./components/ProfileSettingsScreen";
 import ExercisesScreen from "./components/ExercisesScreen";
 import BulletinScreen from "./components/BulletinScreen";
 import CitationsScreen from "./components/CitationsScreen";
+import SyncStatusIndicator from "./components/SyncStatusIndicator";
+import EduMentorLogo from "./components/EduMentorLogo";
+import SplashScreen from "./components/SplashScreen";
+import PwaInstallPrompt from "./components/PwaInstallPrompt";
 
 export default function App() {
+  // Splash Screen state on boot
+  const [showSplash, setShowSplash] = useState(true);
+
   // Navigation & session state
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [history, setHistory] = useState<LearningHistory[]>([]);
@@ -79,29 +90,34 @@ export default function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
 
-  // Bootstrapping session from local storage on load
+  // Bootstrapping session from Cloud Firestore on load & subscribing to real-time sync
   useEffect(() => {
-    setLessons(getStoredLessons());
-    setQuizzes(getStoredQuizzes());
+    const refreshData = () => {
+      setLessons(getStoredLessons());
+      setQuizzes(getStoredQuizzes());
 
-    // Only load session if we are logged in, for demo we load default initially or let user log in
-    const sessionEmail = localStorage.getItem("edumentor_logged_in_email");
-    if (sessionEmail) {
-      const profile = getStoredProfile();
-      setUserProfile(profile);
-      setHistory(getStoredHistory());
-      setCompletedLessonIds(getCompletedLessons());
-      setCompletedQuizzes(getCompletedQuizzes());
-      if (profile && profile.isAdmin) {
-        setActiveTab("admin");
-      } else {
-        setActiveTab("dashboard");
+      const sessionEmail = getActiveSessionEmail();
+      if (sessionEmail) {
+        const profile = getStoredProfile();
+        setUserProfile(profile);
+        setHistory(getStoredHistory());
+        setCompletedLessonIds(getCompletedLessons());
+        setCompletedQuizzes(getCompletedQuizzes());
       }
-    }
+    };
+
+    refreshData();
+
+    // Subscribe to Firestore updates and automatic sync
+    const unsubscribe = subscribeToFirestore(() => {
+      refreshData();
+    });
+
+    return () => unsubscribe();
   }, []);
 
   const handleLogin = (email: string) => {
-    localStorage.setItem("edumentor_logged_in_email", email);
+    setActiveSessionEmail(email);
     const profile = getStoredProfile();
     
     // Check if admin email
@@ -128,7 +144,7 @@ export default function App() {
 
   const handleRegister = (data: { firstName: string; lastName: string; email: string; grade: any }) => {
     const newProfile: UserProfile = {
-      id: "u_" + Math.random().toString(),
+      id: "u_" + Math.random().toString(36).substring(2, 9),
       firstName: data.firstName,
       lastName: data.lastName,
       email: data.email,
@@ -142,13 +158,13 @@ export default function App() {
           id: "welcome_n",
           title: "🎉 Bienvenue sur EduMentor !",
           message: "Débute tes révisions dès aujourd'hui. Ton bonus d'inscription de +100 XP a été accordé !",
-          date: "A l'instant",
+          date: "À l'instant",
           read: false
         }
       ]
     };
     saveProfile(newProfile);
-    localStorage.setItem("edumentor_logged_in_email", data.email);
+    setActiveSessionEmail(data.email);
     setUserProfile(newProfile);
     setHistory([]);
     setCompletedLessonIds([]);
@@ -157,7 +173,7 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    localStorage.removeItem("edumentor_logged_in_email");
+    setActiveSessionEmail("");
     setUserProfile(null);
     setSelectedLesson(null);
     setActiveQuiz(null);
@@ -272,17 +288,20 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 flex font-sans">
+      {/* PWA Install Prompt Banner */}
+      <PwaInstallPrompt />
+
+      {/* Animated Splash Screen */}
+      <AnimatePresence>
+        {showSplash && (
+          <SplashScreen onFinish={() => setShowSplash(false)} />
+        )}
+      </AnimatePresence>
       
       {/* SIDEBAR FOR DESKTOP */}
       <aside className="hidden lg:flex flex-col w-64 bg-slate-900 text-slate-300 border-r border-slate-800 shrink-0 select-none">
-        <div className="p-6 border-b border-slate-800 flex items-center gap-2.5">
-          <div className="bg-blue-600 p-2 rounded-xl text-white">
-            <BookOpen className="h-5 w-5" />
-          </div>
-          <div>
-            <h2 className="text-lg font-black font-heading text-white tracking-tight">EduMentor</h2>
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Apprendre avec l'IA</p>
-          </div>
+        <div className="p-5 border-b border-slate-800 flex items-center justify-center">
+          <EduMentorLogo variant="horizontal" size="md" theme="dark" />
         </div>
 
         {/* Navigation Items */}
@@ -382,7 +401,10 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3 sm:gap-4">
+            {/* Sync status badge */}
+            <SyncStatusIndicator />
+
             {/* Profile indicators (XP & streak) */}
             <div className="flex items-center gap-3 bg-slate-50 border border-slate-150 rounded-2xl px-3 py-1.5 text-xs font-bold text-slate-700">
               <span className="flex items-center gap-1 text-yellow-600">
@@ -468,11 +490,8 @@ export default function App() {
                 transition={{ type: "tween", duration: 0.25 }}
                 className="fixed inset-y-0 left-0 w-64 bg-slate-900 text-slate-300 z-50 flex flex-col shadow-2xl lg:hidden"
               >
-                <div className="p-5 border-b border-slate-800 flex justify-between items-center">
-                  <div className="flex items-center gap-2">
-                    <BookOpen className="h-5 w-5 text-blue-500" />
-                    <span className="font-black text-white text-base">EduMentor</span>
-                  </div>
+                <div className="p-4 border-b border-slate-800 flex justify-between items-center">
+                  <EduMentorLogo size="sm" variant="horizontal" theme="dark" />
                   <button
                     onClick={() => setIsMobileMenuOpen(false)}
                     className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white"
@@ -685,13 +704,13 @@ export default function App() {
                       <div className="flex justify-between items-center">
                         <span className="text-slate-600 text-sm font-semibold">Leçons mémorisées :</span>
                         <span className="text-lg font-black text-slate-800">
-                          {completedLessonIds.length} / {lessons.length}
+                          {completedLessonIds.length} / {lessons.length || 0}
                         </span>
                       </div>
                       <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
                         <div
-                          className="h-full bg-blue-600 rounded-full"
-                          style={{ width: `${(completedLessonIds.length / lessons.length) * 100}%` }}
+                          className="h-full bg-blue-600 rounded-full transition-all duration-300"
+                          style={{ width: `${lessons && lessons.length > 0 ? Math.min(100, Math.max(0, (completedLessonIds.length / lessons.length) * 100)) : 0}%` }}
                         ></div>
                       </div>
                     </div>
@@ -708,8 +727,8 @@ export default function App() {
                       </div>
                       <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
                         <div
-                          className="h-full bg-indigo-600 rounded-full"
-                          style={{ width: `${(Object.keys(completedQuizzes).length / SAMPLE_QUIZZES.length) * 100}%` }}
+                          className="h-full bg-indigo-600 rounded-full transition-all duration-300"
+                          style={{ width: `${SAMPLE_QUIZZES && SAMPLE_QUIZZES.length > 0 ? Math.min(100, Math.max(0, (Object.keys(completedQuizzes).length / SAMPLE_QUIZZES.length) * 100)) : 0}%` }}
                         ></div>
                       </div>
                     </div>
